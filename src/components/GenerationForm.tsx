@@ -17,9 +17,10 @@ const platforms: { value: DistributionPlatform; label: string }[] = [
   { value: 'tidal', label: 'Tidal' },
 ];
 const providers = [
-  { value: 'suno', label: 'Suno (Best vocals)' },
-  { value: 'stable_audio', label: 'Stable Audio (Best instrumentals)' },
-  { value: 'loudly', label: 'Loudly (Best API)' },
+  { value: 'musicgen', label: 'MusicGen (Free - Instrumentals)' },
+  { value: 'suno', label: 'Suno (Paid - Vocals + Full Songs)' },
+  { value: 'stable_audio', label: 'Stable Audio (Paid - Instrumentals)' },
+  { value: 'loudly', label: 'Loudly (Paid - API)' },
 ];
 
 interface GenerationFormProps {
@@ -38,7 +39,7 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
     artist_name: '',
     auto_publish: false,
     platforms: [],
-    ai_provider: 'suno',
+    ai_provider: 'musicgen',
   });
 
   async function handleSubmit(e: React.FormEvent) {

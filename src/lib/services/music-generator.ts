@@ -1,4 +1,5 @@
 import { GenerationRequest, Track } from '../types';
+import { createServerClient } from '../supabase';
 
 interface GenerationResult {
   external_id: string;
@@ -6,6 +7,59 @@ interface GenerationResult {
   duration_seconds: number;
 }
 
+// Meta MusicGen via Hugging Face Inference API (FREE)
+async function generateWithMusicGen(request: GenerationRequest): Promise<GenerationResult> {
+  const prompt = `${request.genre} ${request.mood} ${request.prompt}`.trim();
+
+  const response = await fetch(
+    'https://api-inference.huggingface.co/models/facebook/musicgen-large',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
+      },
+      body: JSON.stringify({
+        inputs: prompt,
+        parameters: {
+          max_new_tokens: 1500, // ~30s of audio
+        },
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`MusicGen API error: ${response.status} - ${errText}`);
+  }
+
+  // HF returns raw audio bytes
+  const audioBuffer = await response.arrayBuffer();
+  const audioBase64 = Buffer.from(audioBuffer).toString('base64');
+
+  // Upload to Supabase Storage
+  const supabase = createServerClient();
+  const filename = `tracks/${Date.now()}-${Math.random().toString(36).slice(2)}.wav`;
+
+  const { error: uploadError } = await supabase.storage
+    .from('audio')
+    .upload(filename, Buffer.from(audioBuffer), {
+      contentType: 'audio/wav',
+      upsert: false,
+    });
+
+  if (uploadError) throw new Error(`Storage upload failed: ${uploadError.message}`);
+
+  const { data: urlData } = supabase.storage.from('audio').getPublicUrl(filename);
+
+  return {
+    external_id: `musicgen-${Date.now()}`,
+    audio_url: urlData.publicUrl,
+    duration_seconds: 30,
+  };
+}
+
+// Suno API integration (paid)
 async function generateWithSuno(request: GenerationRequest): Promise<GenerationResult> {
   const response = await fetch(`${process.env.SUNO_API_URL}/api/generate`, {
     method: 'POST',
@@ -31,6 +85,7 @@ async function generateWithSuno(request: GenerationRequest): Promise<GenerationR
   };
 }
 
+// Stable Audio API integration (paid)
 async function generateWithStableAudio(request: GenerationRequest): Promise<GenerationResult> {
   const response = await fetch('https://api.stability.ai/v2beta/audio/generate', {
     method: 'POST',
@@ -55,6 +110,7 @@ async function generateWithStableAudio(request: GenerationRequest): Promise<Gene
   };
 }
 
+// Loudly API integration (paid)
 async function generateWithLoudly(request: GenerationRequest): Promise<GenerationResult> {
   const response = await fetch('https://api.loudly.com/v1/generate', {
     method: 'POST',
@@ -80,10 +136,13 @@ async function generateWithLoudly(request: GenerationRequest): Promise<Generatio
   };
 }
 
+// Main generator - defaults to MusicGen (free)
 export async function generateTrack(request: GenerationRequest): Promise<GenerationResult> {
-  const provider = request.ai_provider || 'suno';
+  const provider = request.ai_provider || 'musicgen';
 
   switch (provider) {
+    case 'musicgen':
+      return generateWithMusicGen(request);
     case 'suno':
       return generateWithSuno(request);
     case 'stable_audio':
@@ -91,7 +150,7 @@ export async function generateTrack(request: GenerationRequest): Promise<Generat
     case 'loudly':
       return generateWithLoudly(request);
     default:
-      return generateWithSuno(request);
+      return generateWithMusicGen(request);
   }
 }
 
@@ -99,6 +158,11 @@ export async function pollGenerationStatus(
   provider: Track['ai_provider'],
   externalId: string
 ): Promise<{ status: 'pending' | 'complete' | 'failed'; audio_url?: string }> {
+  // MusicGen is synchronous - no polling needed
+  if (provider === 'musicgen') {
+    return { status: 'complete' };
+  }
+
   const urls: Record<string, string> = {
     suno: `${process.env.SUNO_API_URL}/api/status/${externalId}`,
     stable_audio: `https://api.stability.ai/v2beta/audio/status/${externalId}`,
