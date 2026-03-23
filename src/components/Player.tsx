@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { useJukeboxStore } from '@/lib/store';
+import { useSoundMintStore } from '@/lib/store';
 import { Play, Pause, SkipBack, SkipForward, Volume2, Music } from 'lucide-react';
 
 export default function Player() {
-  const { currentTrack, isPlaying, setIsPlaying } = useJukeboxStore();
+  const { currentTrack, isPlaying, setIsPlaying } = useSoundMintStore();
   const audioRef = useRef<HTMLAudioElement>(null);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);

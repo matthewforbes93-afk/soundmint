@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { Track, DashboardStats } from './types';
 
-interface JukeboxStore {
+interface SoundMintStore {
   tracks: Track[];
   setTracks: (tracks: Track[]) => void;
   addTrack: (track: Track) => void;
@@ -26,7 +26,7 @@ interface JukeboxStore {
   setGenreFilter: (f: string) => void;
 }
 
-export const useJukeboxStore = create<JukeboxStore>((set) => ({
+export const useSoundMintStore = create<SoundMintStore>((set) => ({
   tracks: [],
   setTracks: (tracks) => set({ tracks }),
   addTrack: (track) => set((s) => ({ tracks: [track, ...s.tracks] })),

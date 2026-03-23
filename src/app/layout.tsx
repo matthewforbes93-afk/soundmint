@@ -8,7 +8,7 @@ import { Toaster } from 'react-hot-toast';
 const geist = Geist({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'JukeboxAI - AI Music Empire',
+  title: 'SoundMint - Mint Your Music Empire',
   description: 'Generate, publish, and monetize AI music across all streaming platforms.',
 };
 

@@ -19,7 +19,7 @@ export default function SettingsPage() {
   });
 
   function handleSave() {
-    localStorage.setItem('jukebox_settings', JSON.stringify(settings));
+    localStorage.setItem('soundmint_settings', JSON.stringify(settings));
     toast.success('Settings saved');
   }
 

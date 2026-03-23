@@ -23,8 +23,8 @@ export default function Sidebar() {
             <Music2 className="w-5 h-5 text-white" />
           </div>
           <div>
-            <h1 className="text-lg font-bold text-white">JukeboxAI</h1>
-            <p className="text-xs text-gray-500">Music Empire</p>
+            <h1 className="text-lg font-bold text-white">SoundMint</h1>
+            <p className="text-xs text-gray-500">Mint Your Music</p>
           </div>
         </Link>
       </div>

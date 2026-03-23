@@ -2,7 +2,7 @@
 
 import { Track } from '@/lib/types';
 import { Play, Pause, Upload, Trash2, Music } from 'lucide-react';
-import { useJukeboxStore } from '@/lib/store';
+import { useSoundMintStore } from '@/lib/store';
 
 const statusColors: Record<string, string> = {
   generating: 'bg-yellow-500/20 text-yellow-400',
@@ -19,7 +19,7 @@ interface TrackCardProps {
 }
 
 export default function TrackCard({ track, onPublish, onDelete }: TrackCardProps) {
-  const { currentTrack, isPlaying, setCurrentTrack, setIsPlaying } = useJukeboxStore();
+  const { currentTrack, isPlaying, setCurrentTrack, setIsPlaying } = useSoundMintStore();
   const isCurrentTrack = currentTrack?.id === track.id;
 
   function handlePlay() {
