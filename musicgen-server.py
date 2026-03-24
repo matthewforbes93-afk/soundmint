@@ -3,13 +3,17 @@ SoundMint Local Music Server
 - MusicGen: instrumental music generation (Meta)
 - Demucs: stem separation (Meta) — drums, bass, vocals, other
 - Auto-mastering: loudness normalization, EQ, compression
-- Mixing: per-stem volume, pan, reverb
+- Mixing: per-stem volume, pan, reverb, EQ, compression, delay, chorus
+- Audio analysis: BPM detection, key detection
+- Effects processing: EQ, compression, delay, chorus, reverb
 - MP3/WAV output
 Endpoints:
   POST /generate       — generate music
   POST /master         — master uploaded audio
   POST /separate       — separate audio into stems
-  POST /mix            — mix stems with volume/pan/reverb controls
+  POST /mix            — mix stems with volume/pan/reverb/EQ/compression/delay/chorus
+  POST /analyze        — detect BPM + musical key
+  POST /effects        — apply EQ/compression/delay/chorus/reverb
   GET  /health         — server status
 """
 
@@ -110,6 +114,110 @@ def pan_audio(audio: AudioSegment, pan: float = 0.0) -> AudioSegment:
         return audio
     return audio.pan(pan)
 
+def apply_eq(audio: AudioSegment, low_gain: float = 0, mid_gain: float = 0, high_gain: float = 0) -> AudioSegment:
+    """3-band parametric EQ. Gains in dB."""
+    low = audio.low_pass_filter(300).apply_gain(low_gain)
+    mid_band = audio.high_pass_filter(300).low_pass_filter(4000).apply_gain(mid_gain)
+    high = audio.high_pass_filter(4000).apply_gain(high_gain)
+    return low.overlay(mid_band).overlay(high)
+
+def apply_compression(audio: AudioSegment, threshold: float = -20, ratio: float = 4.0, attack: float = 5.0, release: float = 50.0) -> AudioSegment:
+    return compress_dynamic_range(audio, threshold=threshold, ratio=ratio, attack=attack, release=release)
+
+def apply_delay(audio: AudioSegment, delay_ms: int = 300, feedback: float = 0.4, mix: float = 0.3) -> AudioSegment:
+    result = audio
+    delayed = audio
+    for i in range(4):
+        silence = AudioSegment.silent(duration=delay_ms)
+        delayed = silence + delayed
+        delayed = delayed[:len(audio)]
+        decay = feedback ** (i + 1)
+        delayed_quiet = delayed - (20 * (1 - decay))
+        result = result.overlay(delayed_quiet)
+    # Wet/dry mix
+    dry_gain = 1 - mix
+    wet_gain = mix
+    return audio.apply_gain(20 * np.log10(dry_gain + 0.001)).overlay(result.apply_gain(20 * np.log10(wet_gain + 0.001)))
+
+def apply_chorus(audio: AudioSegment, depth: float = 0.3) -> AudioSegment:
+    if depth <= 0: return audio
+    # Create slightly pitch-shifted copies
+    shifted_up = audio._spawn(audio.raw_data, overrides={"frame_rate": int(audio.frame_rate * 1.003)}).set_frame_rate(audio.frame_rate)
+    shifted_down = audio._spawn(audio.raw_data, overrides={"frame_rate": int(audio.frame_rate * 0.997)}).set_frame_rate(audio.frame_rate)
+    # Ensure same length
+    shifted_up = shifted_up[:len(audio)]
+    shifted_down = shifted_down[:len(audio)]
+    chorus = audio.overlay(shifted_up - (10 * (1-depth))).overlay(shifted_down - (10 * (1-depth)))
+    return chorus
+
+def detect_bpm(audio: AudioSegment) -> float:
+    """Detect BPM using onset detection."""
+    samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
+    if audio.channels == 2:
+        samples = samples.reshape((-1, 2)).mean(axis=1)
+    # Energy-based onset detection
+    hop = int(audio.frame_rate * 0.01)  # 10ms hops
+    energy = np.array([np.sum(samples[i:i+hop]**2) for i in range(0, len(samples) - hop, hop)])
+    # Diff of energy = onsets
+    onset = np.diff(energy)
+    onset[onset < 0] = 0
+    onset = onset / (onset.max() + 1e-8)
+    # Find peaks
+    threshold = 0.3
+    peaks = []
+    for i in range(1, len(onset) - 1):
+        if onset[i] > threshold and onset[i] > onset[i-1] and onset[i] > onset[i+1]:
+            peaks.append(i)
+    if len(peaks) < 2:
+        return 120.0  # Default
+    # Calculate intervals
+    intervals = np.diff(peaks) * 0.01  # Convert to seconds
+    avg_interval = np.median(intervals)
+    bpm = 60.0 / avg_interval if avg_interval > 0 else 120.0
+    # Normalize to reasonable range
+    while bpm < 60: bpm *= 2
+    while bpm > 200: bpm /= 2
+    return round(bpm, 1)
+
+def detect_key(audio: AudioSegment) -> dict:
+    """Detect musical key using chroma analysis."""
+    samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
+    if audio.channels == 2:
+        samples = samples.reshape((-1, 2)).mean(axis=1)
+    sr = audio.frame_rate
+    # Simple FFT-based chroma
+    n_fft = 4096
+    chroma_sum = np.zeros(12)
+    note_names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+    for start in range(0, len(samples) - n_fft, n_fft):
+        frame = samples[start:start + n_fft]
+        spectrum = np.abs(np.fft.rfft(frame))
+        freqs = np.fft.rfftfreq(n_fft, 1.0 / sr)
+        for i, freq in enumerate(freqs):
+            if freq < 60 or freq > 5000: continue
+            note = int(round(12 * np.log2(freq / 440.0 + 1e-8))) % 12
+            chroma_sum[note] += spectrum[i]
+    # Major and minor profiles (Krumhansl-Kessler)
+    major_profile = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
+    minor_profile = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
+    best_corr = -1
+    best_key = 'C'
+    best_mode = 'major'
+    chroma_norm = chroma_sum / (chroma_sum.max() + 1e-8)
+    for shift in range(12):
+        rotated = np.roll(chroma_norm, -shift)
+        maj_corr = np.corrcoef(rotated, major_profile)[0, 1]
+        min_corr = np.corrcoef(rotated, minor_profile)[0, 1]
+        if maj_corr > best_corr:
+            best_corr = maj_corr
+            best_key = note_names[shift]
+            best_mode = 'major'
+        if min_corr > best_corr:
+            best_corr = min_corr
+            best_key = note_names[shift]
+            best_mode = 'minor'
+    return {"key": best_key, "mode": best_mode, "confidence": round(float(best_corr), 2)}
+
 # --- Model Loading ---
 
 def load_musicgen():
@@ -131,7 +239,7 @@ def health():
         "status": "ok",
         "musicgen": musicgen_model is not None,
         "device": device,
-        "features": ["generate", "master", "separate", "mix", "mp3", "wav"],
+        "features": ["generate", "master", "separate", "mix", "analyze", "effects", "eq", "compression", "delay", "chorus", "reverb", "bpm", "key", "mp3", "wav"],
     })
 
 @app.route("/generate", methods=["POST"])
@@ -328,6 +436,25 @@ def mix_stems():
             if reverb_amt > 0:
                 stem_audio = apply_reverb(stem_audio, reverb_amt)
 
+            # Apply EQ
+            if "eq" in stem_config:
+                eq = stem_config["eq"]
+                stem_audio = apply_eq(stem_audio, eq.get("low", 0), eq.get("mid", 0), eq.get("high", 0))
+
+            # Apply compression
+            if "compression" in stem_config:
+                comp = stem_config["compression"]
+                stem_audio = apply_compression(stem_audio, comp.get("threshold", -20), comp.get("ratio", 4.0))
+
+            # Apply delay
+            if "delay" in stem_config:
+                d = stem_config["delay"]
+                stem_audio = apply_delay(stem_audio, d.get("time", 300), d.get("feedback", 0.4), d.get("mix", 0.3))
+
+            # Apply chorus
+            if "chorus" in stem_config:
+                stem_audio = apply_chorus(stem_audio, stem_config["chorus"].get("depth", 0.3))
+
             # Mix into output
             if mixed is None:
                 mixed = stem_audio
@@ -359,6 +486,57 @@ def mix_stems():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+@app.route("/analyze", methods=["POST"])
+def analyze():
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    file = request.files["file"]
+    try:
+        if file.filename and file.filename.endswith(".mp3"):
+            audio = AudioSegment.from_mp3(file)
+        else:
+            audio = AudioSegment.from_wav(file)
+        bpm = detect_bpm(audio)
+        key_info = detect_key(audio)
+        return jsonify({"bpm": bpm, "key": key_info["key"], "mode": key_info["mode"], "confidence": key_info["confidence"], "duration_ms": len(audio), "channels": audio.channels, "sample_rate": audio.frame_rate})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/effects", methods=["POST"])
+def apply_effects_route():
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    file = request.files["file"]
+    output_format = request.form.get("format", "wav")
+    effects_json = request.form.get("effects", "{}")
+    effects = json.loads(effects_json)
+    try:
+        if file.filename and file.filename.endswith(".mp3"):
+            audio = AudioSegment.from_mp3(file)
+        else:
+            audio = AudioSegment.from_wav(file)
+        # Apply each effect
+        if "eq" in effects:
+            eq = effects["eq"]
+            audio = apply_eq(audio, eq.get("low", 0), eq.get("mid", 0), eq.get("high", 0))
+        if "compression" in effects:
+            comp = effects["compression"]
+            audio = apply_compression(audio, comp.get("threshold", -20), comp.get("ratio", 4.0), comp.get("attack", 5.0), comp.get("release", 50.0))
+        if "delay" in effects:
+            d = effects["delay"]
+            audio = apply_delay(audio, d.get("time", 300), d.get("feedback", 0.4), d.get("mix", 0.3))
+        if "chorus" in effects:
+            audio = apply_chorus(audio, effects["chorus"].get("depth", 0.3))
+        if "reverb" in effects:
+            audio = apply_reverb(audio, effects["reverb"].get("amount", 0.3))
+        out_buf, mimetype, ext = segment_to_format(audio, output_format)
+        out_buf.seek(0)
+        return send_file(out_buf, mimetype=mimetype, download_name=f"processed.{ext}")
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == "__main__":
     load_musicgen()
     print(f"\n=== SoundMint Music Server ({device.upper()}) ===")
@@ -366,6 +544,8 @@ if __name__ == "__main__":
     print("POST /master     — master uploaded audio")
     print("POST /separate   — stem separation (drums/bass/vocals/other)")
     print("POST /mix        — mix stems with volume/pan/reverb")
+    print("POST /analyze    — detect BPM + musical key")
+    print("POST /effects    — apply EQ/compression/delay/chorus/reverb")
     print("GET  /health     — server status")
     print(f"http://localhost:8501\n")
     app.run(host="0.0.0.0", port=8501, debug=False)
