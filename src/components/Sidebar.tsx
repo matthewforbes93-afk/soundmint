@@ -2,11 +2,12 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, Wand2, Library, Layers, Settings, Music2 } from 'lucide-react';
+import { LayoutDashboard, Wand2, Library, Layers, Sliders, Settings, Music2 } from 'lucide-react';
 
 const navItems = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/generate', label: 'Generate', icon: Wand2 },
+  { href: '/studio', label: 'Studio', icon: Sliders },
   { href: '/library', label: 'Library', icon: Library },
   { href: '/bulk', label: 'Bulk Generate', icon: Layers },
   { href: '/settings', label: 'Settings', icon: Settings },
