@@ -1,3 +1,5 @@
+export const maxDuration = 300; // 5 min timeout for music generation
+
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase';
 import { generateTrack } from '@/lib/services/music-generator';
@@ -47,16 +49,28 @@ export async function POST(request: NextRequest) {
 
   if (insertError) return NextResponse.json({ error: insertError.message }, { status: 500 });
 
-  processGeneration(supabase, trackId, body).catch(console.error);
-
-  return NextResponse.json({ id: trackId, status: 'generating' }, { status: 201 });
+  // Wait for generation (local server needs time)
+  try {
+    await processGeneration(supabase, trackId, body);
+    const { data: track } = await supabase.from('tracks').select('*').eq('id', trackId).single();
+    return NextResponse.json(track, { status: 201 });
+  } catch {
+    return NextResponse.json({ id: trackId, status: 'generating' }, { status: 201 });
+  }
 }
 
 async function processGeneration(supabase: ReturnType<typeof createServerClient>, trackId: string, request: GenerationRequest) {
   try {
     const result = await generateTrack(request);
-    const title = generateTitle(request.genre, request.mood);
-    const coverArtUrl = await generateCoverArt(title, request.genre, request.mood);
+
+    // Generate cover art (skip if it fails - not critical)
+    let coverArtUrl: string | null = null;
+    try {
+      const title = generateTitle(request.genre, request.mood);
+      coverArtUrl = await generateCoverArt(title, request.genre, request.mood);
+    } catch (e) {
+      console.log('Cover art generation skipped:', e);
+    }
 
     await supabase.from('tracks').update({
       status: request.auto_publish ? 'publishing' : 'ready',
@@ -73,7 +87,7 @@ async function processGeneration(supabase: ReturnType<typeof createServerClient>
         const results = await publishToDistroKid({
           track,
           platforms: request.platforms,
-          cover_art_url: coverArtUrl,
+          cover_art_url: coverArtUrl || '',
         });
 
         for (const dist of results) {

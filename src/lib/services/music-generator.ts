@@ -11,28 +11,34 @@ interface GenerationResult {
 async function generateWithMusicGen(request: GenerationRequest): Promise<GenerationResult> {
   const prompt = `${request.genre} ${request.mood} ${request.prompt}`.trim();
 
-  // Try HuggingFace first, fall back to Replicate
+  // Try local MusicGen server first, then HuggingFace, then Replicate
   let audioBuffer: ArrayBuffer;
+  const localUrl = process.env.MUSICGEN_LOCAL_URL || 'http://localhost:8001';
 
   try {
-    audioBuffer = await generateViaHuggingFace(prompt);
-  } catch (hfError) {
-    console.log('HuggingFace failed, trying Replicate:', hfError);
-    if (process.env.REPLICATE_API_KEY) {
-      audioBuffer = await generateViaReplicate(prompt);
-    } else {
-      throw hfError;
+    audioBuffer = await generateViaLocal(prompt, localUrl);
+  } catch (localError) {
+    console.log('Local MusicGen failed, trying HuggingFace:', localError);
+    try {
+      audioBuffer = await generateViaHuggingFace(prompt);
+    } catch (hfError) {
+      console.log('HuggingFace failed, trying Replicate:', hfError);
+      if (process.env.REPLICATE_API_KEY) {
+        audioBuffer = await generateViaReplicate(prompt);
+      } else {
+        throw hfError;
+      }
     }
   }
 
   // Upload to Supabase Storage
   const supabase = createServerClient();
-  const filename = `tracks/${Date.now()}-${Math.random().toString(36).slice(2)}.wav`;
+  const filename = `tracks/${Date.now()}-${Math.random().toString(36).slice(2)}.mp3`;
 
   const { error: uploadError } = await supabase.storage
     .from('audio')
     .upload(filename, Buffer.from(audioBuffer), {
-      contentType: 'audio/wav',
+      contentType: 'audio/mpeg',
       upsert: false,
     });
 
@@ -45,6 +51,21 @@ async function generateWithMusicGen(request: GenerationRequest): Promise<Generat
     audio_url: urlData.publicUrl,
     duration_seconds: 30,
   };
+}
+
+async function generateViaLocal(prompt: string, baseUrl: string): Promise<ArrayBuffer> {
+  const response = await fetch(`${baseUrl}/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt, duration: 15, format: 'mp3', master: true }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Local MusicGen error: ${response.status} - ${errText}`);
+  }
+
+  return response.arrayBuffer();
 }
 
 async function generateViaHuggingFace(prompt: string): Promise<ArrayBuffer> {
@@ -68,20 +89,20 @@ async function generateViaHuggingFace(prompt: string): Promise<ArrayBuffer> {
 }
 
 async function generateViaReplicate(prompt: string): Promise<ArrayBuffer> {
-  // Start prediction
-  const startRes = await fetch('https://api.replicate.com/v1/predictions', {
+  // Start prediction using official meta/musicgen model
+  const startRes = await fetch('https://api.replicate.com/v1/models/meta/musicgen/predictions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${process.env.REPLICATE_API_KEY}`,
     },
     body: JSON.stringify({
-      version: 'b05b1dff1d8c6dc63d14b0cdb42135571e41c36ba4e4b09f8b2d0c6e6f2e8d29',
       input: {
         prompt,
         duration: 30,
         model_version: 'stereo-melody-large',
         output_format: 'wav',
+        normalization_strategy: 'loudness',
       },
     }),
   });

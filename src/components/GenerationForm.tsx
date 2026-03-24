@@ -29,6 +29,8 @@ interface GenerationFormProps {
 
 export default function GenerationForm({ onGenerated }: GenerationFormProps) {
   const [loading, setLoading] = useState(false);
+  const [outputFormat, setOutputFormat] = useState<'mp3' | 'wav'>('mp3');
+  const [autoMaster, setAutoMaster] = useState(true);
   const [form, setForm] = useState<GenerationRequest>({
     genre: 'lo-fi',
     mood: 'chill',
@@ -105,6 +107,40 @@ export default function GenerationForm({ onGenerated }: GenerationFormProps) {
       <div>
         <label className={labelClass}>Duration: {form.duration}s ({Math.floor((form.duration || 180) / 60)}:{String((form.duration || 180) % 60).padStart(2, '0')})</label>
         <input type="range" min={30} max={480} step={30} value={form.duration} onChange={(e) => setForm({ ...form, duration: parseInt(e.target.value) })} className="w-full accent-purple-500" />
+      </div>
+
+      {/* Output Format & Mastering */}
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className={labelClass}>Output Format</label>
+          <div className="flex gap-2">
+            {(['mp3', 'wav'] as const).map((fmt) => (
+              <button
+                key={fmt}
+                type="button"
+                onClick={() => setOutputFormat(fmt)}
+                className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  outputFormat === fmt ? 'bg-purple-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                }`}
+              >
+                {fmt.toUpperCase()}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <label className={labelClass}>Auto-Master</label>
+          <div className="flex items-center gap-3 mt-1">
+            <button
+              type="button"
+              onClick={() => setAutoMaster(!autoMaster)}
+              className={`relative w-11 h-6 rounded-full transition-colors ${autoMaster ? 'bg-purple-600' : 'bg-gray-700'}`}
+            >
+              <div className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${autoMaster ? 'translate-x-5' : ''}`} />
+            </button>
+            <span className="text-xs text-gray-400">-14 LUFS (Spotify standard)</span>
+          </div>
+        </div>
       </div>
 
       <div className="flex items-center gap-3">
