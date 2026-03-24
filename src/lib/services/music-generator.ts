@@ -11,31 +11,19 @@ interface GenerationResult {
 async function generateWithMusicGen(request: GenerationRequest): Promise<GenerationResult> {
   const prompt = `${request.genre} ${request.mood} ${request.prompt}`.trim();
 
-  const response = await fetch(
-    'https://api-inference.huggingface.co/models/facebook/musicgen-large',
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
-      },
-      body: JSON.stringify({
-        inputs: prompt,
-        parameters: {
-          max_new_tokens: 1500, // ~30s of audio
-        },
-      }),
+  // Try HuggingFace first, fall back to Replicate
+  let audioBuffer: ArrayBuffer;
+
+  try {
+    audioBuffer = await generateViaHuggingFace(prompt);
+  } catch (hfError) {
+    console.log('HuggingFace failed, trying Replicate:', hfError);
+    if (process.env.REPLICATE_API_KEY) {
+      audioBuffer = await generateViaReplicate(prompt);
+    } else {
+      throw hfError;
     }
-  );
-
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`MusicGen API error: ${response.status} - ${errText}`);
   }
-
-  // HF returns raw audio bytes
-  const audioBuffer = await response.arrayBuffer();
-  const audioBase64 = Buffer.from(audioBuffer).toString('base64');
 
   // Upload to Supabase Storage
   const supabase = createServerClient();
@@ -57,6 +45,68 @@ async function generateWithMusicGen(request: GenerationRequest): Promise<Generat
     audio_url: urlData.publicUrl,
     duration_seconds: 30,
   };
+}
+
+async function generateViaHuggingFace(prompt: string): Promise<ArrayBuffer> {
+  const response = await fetch(
+    'https://router.huggingface.co/hf-inference/models/facebook/musicgen-small',
+    {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
+      },
+      body: JSON.stringify({ inputs: prompt }),
+    }
+  );
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`HuggingFace error: ${response.status} - ${errText}`);
+  }
+
+  return response.arrayBuffer();
+}
+
+async function generateViaReplicate(prompt: string): Promise<ArrayBuffer> {
+  // Start prediction
+  const startRes = await fetch('https://api.replicate.com/v1/predictions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.REPLICATE_API_KEY}`,
+    },
+    body: JSON.stringify({
+      version: 'b05b1dff1d8c6dc63d14b0cdb42135571e41c36ba4e4b09f8b2d0c6e6f2e8d29',
+      input: {
+        prompt,
+        duration: 30,
+        model_version: 'stereo-melody-large',
+        output_format: 'wav',
+      },
+    }),
+  });
+
+  if (!startRes.ok) throw new Error(`Replicate start error: ${startRes.status}`);
+  const prediction = await startRes.json();
+
+  // Poll for completion (max 2 minutes)
+  let result = prediction;
+  for (let i = 0; i < 24; i++) {
+    if (result.status === 'succeeded') break;
+    if (result.status === 'failed') throw new Error('Replicate generation failed');
+
+    await new Promise(r => setTimeout(r, 5000));
+    const pollRes = await fetch(result.urls.get, {
+      headers: { 'Authorization': `Bearer ${process.env.REPLICATE_API_KEY}` },
+    });
+    result = await pollRes.json();
+  }
+
+  if (result.status !== 'succeeded') throw new Error('Replicate generation timed out');
+
+  // Download the audio
+  const audioRes = await fetch(result.output);
+  return audioRes.arrayBuffer();
 }
 
 // Suno API integration (paid)
