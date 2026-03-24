@@ -1,5 +1,5 @@
 export type TrackStatus = 'generating' | 'ready' | 'publishing' | 'published' | 'failed';
-export type Genre = 'lo-fi' | 'ambient' | 'jazz' | 'classical' | 'electronic' | 'hip-hop' | 'pop' | 'r&b' | 'rock' | 'latin' | 'afrobeat' | 'country' | 'meditation' | 'cinematic';
+export type Genre = 'lo-fi' | 'ambient' | 'jazz' | 'classical' | 'electronic' | 'hip-hop' | 'rap' | 'trap' | 'drill' | 'pop' | 'r&b' | 'rock' | 'latin' | 'reggaeton' | 'afrobeat' | 'dancehall' | 'country' | 'gospel' | 'soul' | 'funk' | 'meditation' | 'cinematic';
 export type Mood = 'chill' | 'energetic' | 'melancholic' | 'uplifting' | 'dark' | 'peaceful' | 'romantic' | 'epic' | 'dreamy' | 'aggressive';
 export type DistributionPlatform = 'spotify' | 'apple_music' | 'amazon_music' | 'youtube_music' | 'tiktok' | 'deezer' | 'tidal';
 
