@@ -322,44 +322,52 @@ export class BeatPlayer {
     if (this.intervalId) return;
     if (this.ctx.state === 'suspended') this.ctx.resume();
 
-    // Generate a unique variation each time
-    const pattern = generateVariation(this.config.genre);
-    const msPerStep = (60 / this.config.bpm / 4) * 1000;
+    // Generate pattern ONCE per start (not every loop)
+    if (!this._pattern) {
+      this._pattern = generateVariation(this.config.genre);
+    }
+    const pattern = this._pattern;
+    const secPerStep = 60 / this.config.bpm / 4;
     this.step = 0;
 
-    const tick = () => {
-      const s = this.step % 16;
+    // Use lookahead scheduling for tight timing
+    // Schedule notes slightly ahead using Web Audio's clock
+    let nextStepTime = this.ctx.currentTime + 0.05; // Start 50ms from now
 
-      // Swing: delay odd-numbered steps slightly
-      const swingMs = (s % 2 === 1) ? msPerStep * 0.08 : 0;
+    const scheduler = () => {
+      // Schedule all steps that fall within the next 100ms
+      while (nextStepTime < this.ctx.currentTime + 0.1) {
+        const s = this.step % 16;
+        const t = nextStepTime;
 
-      // Drums with swing
-      setTimeout(() => {
+        // Drums — scheduled at exact audio time
         if (pattern.kick[s]) this.playKick();
         if (pattern.snare[s]) this.playSnare();
-        if (pattern.hihat[s]) this.playHihat(s % 8 === 6); // Open hihat on off-beats
+        if (pattern.hihat[s]) this.playHihat(s % 8 === 6);
         if (pattern.clap[s]) this.playClap();
-      }, swingMs);
 
-      // Chords every 4 beats (every bar)
-      if (s === 0) {
-        const chordIdx = Math.floor(this.step / 16) % 4;
-        this.playChord(chordIdx);
-        this.playBass(chordIdx);
+        // Chords on beat 1 of each bar
+        if (s === 0) {
+          const chordIdx = Math.floor(this.step / 16) % 4;
+          this.playChord(chordIdx);
+        }
+
+        // Bass on beats 1 and 3
+        if (s === 0 || s === 8) {
+          const chordIdx = Math.floor(this.step / 16) % 4;
+          this.playBass(chordIdx);
+        }
+
+        this.step++;
+        nextStepTime += secPerStep;
       }
-
-      // Bass on beat 1 and 3
-      if (s === 0 || s === 8) {
-        const chordIdx = Math.floor(this.step / 16) % 4;
-        this.playBass(chordIdx);
-      }
-
-      this.step++;
     };
 
-    tick();
-    this.intervalId = window.setInterval(tick, msPerStep);
+    // Run scheduler every 25ms (faster than 100ms lookahead = no gaps)
+    this.intervalId = window.setInterval(scheduler, 25);
   }
+
+  private _pattern: Record<string, boolean[]> | null = null;
 
   stop() {
     if (this.intervalId) {
