@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { Wand2, Play, Pause, Mic, CircleDot, Square, Download, Save, ChevronRight, Check, Music, Loader2 } from 'lucide-react';
+import { Wand2, Play, Pause, Mic, CircleDot, Square, Download, Save, ChevronRight, Check, Music, Loader2, Zap } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { BeatPlayer } from '@/lib/beatFactory';
 
 type Step = 'setup' | 'generate' | 'preview' | 'record' | 'mix' | 'export';
 
@@ -78,6 +79,8 @@ export default function SessionPage() {
   const [autoMode, setAutoMode] = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
+  const [useInstantBeat, setUseInstantBeat] = useState(true);
+  const beatPlayerRef = useRef<BeatPlayer | null>(null);
   const beatAudioRef = useRef<HTMLAudioElement>(null);
   const vocalAudioRef = useRef<HTMLAudioElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -105,11 +108,44 @@ export default function SessionPage() {
     }
   }
 
-  // Quick start — just enter name + title, everything else is automatic
+  // Instant beat — plays immediately using Web Audio synthesis
+  function startInstantBeat() {
+    if (!artistName.trim()) return toast.error('Enter your artist name');
+    if (!songTitle.trim()) return toast.error('Enter a song title');
+
+    // Create beat player instantly
+    beatPlayerRef.current?.destroy();
+    const key = ['C', 'D', 'E', 'F', 'G', 'A'][Math.floor(Math.random() * 6)];
+    beatPlayerRef.current = new BeatPlayer({ genre, mood, bpm, key });
+    beatPlayerRef.current.start();
+    setIsPlaying(true);
+    setStep('preview');
+    toast.success('Beat playing!');
+  }
+
+  function stopInstantBeat() {
+    beatPlayerRef.current?.stop();
+    setIsPlaying(false);
+  }
+
+  function toggleInstantBeat() {
+    if (isPlaying) {
+      stopInstantBeat();
+    } else {
+      beatPlayerRef.current?.start();
+      setIsPlaying(true);
+    }
+  }
+
+  // Quick start — instant by default, AI as option
   function quickStart() {
     if (!artistName.trim()) return toast.error('Enter your artist name');
     if (!songTitle.trim()) return toast.error('Enter a song title');
-    generateBeat();
+    if (useInstantBeat) {
+      startInstantBeat();
+    } else {
+      generateBeat();
+    }
   }
 
   // --- Step 2: Generate beat ---
@@ -219,7 +255,9 @@ export default function SessionPage() {
       };
 
       // Play beat while recording
-      if (beatAudioRef.current) {
+      if (useInstantBeat) {
+        beatPlayerRef.current?.start();
+      } else if (beatAudioRef.current) {
         beatAudioRef.current.currentTime = 0;
         beatAudioRef.current.play();
       }
@@ -234,7 +272,11 @@ export default function SessionPage() {
   function stopRecording() {
     mediaRecorderRef.current?.stop();
     setIsRecording(false);
-    if (beatAudioRef.current) beatAudioRef.current.pause();
+    if (useInstantBeat) {
+      beatPlayerRef.current?.stop();
+    } else if (beatAudioRef.current) {
+      beatAudioRef.current.pause();
+    }
   }
 
   // --- Step 5: Mix (adjust volumes) ---
@@ -336,12 +378,19 @@ export default function SessionPage() {
               </div>
             )}
 
-            {/* Quick start button */}
-            <button onClick={quickStart}
-              disabled={!artistName.trim() || !songTitle.trim()}
-              className="w-full bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white font-medium py-4 rounded-lg flex items-center justify-center gap-2 text-lg">
-              <Wand2 className="w-5 h-5" /> Create My Beat <ChevronRight className="w-5 h-5" />
-            </button>
+            {/* Quick start buttons */}
+            <div className="flex gap-3">
+              <button onClick={() => { setUseInstantBeat(true); startInstantBeat(); }}
+                disabled={!artistName.trim() || !songTitle.trim()}
+                className="flex-1 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white font-medium py-4 rounded-lg flex items-center justify-center gap-2 text-lg">
+                <Zap className="w-5 h-5" /> Instant Beat
+              </button>
+              <button onClick={() => { setUseInstantBeat(false); generateBeat(); }}
+                disabled={!artistName.trim() || !songTitle.trim()}
+                className="flex-1 bg-white/5 hover:bg-white/10 disabled:opacity-50 text-gray-300 font-medium py-4 rounded-lg flex items-center justify-center gap-2 border border-white/10">
+                <Wand2 className="w-4 h-4" /> AI Beat (2-3 min)
+              </button>
+            </div>
 
             {/* Advanced options toggle */}
             <button onClick={() => setShowAdvanced(!showAdvanced)}
@@ -390,15 +439,15 @@ export default function SessionPage() {
           <h2 className="text-xl font-bold text-white mb-2">Your Beat is Ready</h2>
           <p className="text-gray-400 text-sm mb-6">{songTitle} · {genre} · {mood} · {bpm} BPM</p>
 
-          <button onClick={toggleBeatPlay}
+          <button onClick={useInstantBeat ? toggleInstantBeat : toggleBeatPlay}
             className="w-16 h-16 bg-teal-600 hover:bg-teal-700 rounded-full flex items-center justify-center mx-auto mb-6">
             {isPlaying ? <Pause className="w-6 h-6 text-white" /> : <Play className="w-6 h-6 text-white ml-1" />}
           </button>
 
           <div className="flex gap-3">
-            <button onClick={() => { setStep('setup'); setBeatUrl(null); }}
+            <button onClick={() => { stopInstantBeat(); setStep('setup'); setBeatUrl(null); }}
               className="flex-1 py-3 bg-white/5 hover:bg-white/10 rounded-lg text-sm text-gray-300">
-              Regenerate
+              Try Different Beat
             </button>
             <button onClick={() => setStep('record')}
               className="flex-1 py-3 bg-teal-600 hover:bg-teal-700 rounded-lg text-sm text-white font-medium flex items-center justify-center gap-2">
