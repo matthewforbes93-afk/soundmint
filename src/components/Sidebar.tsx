@@ -5,11 +5,12 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, Sliders, Wand2, Library,
   Upload, FolderOpen, Settings, Music2, Mic, Radio,
-  Users, ShoppingBag
+  Users, ShoppingBag, Disc3
 } from 'lucide-react';
 
 const navItems = [
   { href: '/', label: 'Home', icon: LayoutDashboard },
+  { href: '/session', label: 'New Session', icon: Disc3 },
   { href: '/studio', label: 'Studio', icon: Sliders },
   { href: '/playground', label: 'AI Playground', icon: Wand2 },
   { href: '/recorder', label: 'Recorder', icon: Mic },
