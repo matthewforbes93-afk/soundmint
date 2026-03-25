@@ -246,8 +246,29 @@ export default function SessionPage() {
           const uploadRes = await fetch('/api/upload', { method: 'POST', body: formData });
           const uploadData = await uploadRes.json();
           if (uploadRes.ok) {
-            setVocalUrl(uploadData.audio_url);
-            toast.success('Vocals recorded!');
+            // Run noise isolation via Demucs stem separation
+            toast.success('Cleaning vocals...');
+            try {
+              const sepForm = new FormData();
+              const vocalBlob = new Blob([wav], { type: 'audio/wav' });
+              sepForm.append('file', new File([vocalBlob], 'vocal.wav', { type: 'audio/wav' }));
+              sepForm.append('format', 'wav');
+              const sepRes = await fetch('/api/separate', { method: 'POST', body: sepForm });
+              const sepData = await sepRes.json();
+              if (sepRes.ok && sepData.stems?.vocals) {
+                // Use the isolated vocal track instead
+                setVocalUrl(sepData.stems.vocals);
+                toast.success('Vocals cleaned & isolated!');
+              } else {
+                // Fallback to raw recording
+                setVocalUrl(uploadData.audio_url);
+                toast.success('Vocals recorded!');
+              }
+            } catch {
+              // Fallback to raw recording
+              setVocalUrl(uploadData.audio_url);
+              toast.success('Vocals recorded!');
+            }
             setStep('mix');
           }
           ctx.close();
