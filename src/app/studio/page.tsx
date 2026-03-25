@@ -203,17 +203,40 @@ export default function StudioPage() {
   // In-studio recording
   async function startStudioRecording() {
     const armedTrack = tracks.find(t => t.armed);
-    if (!armedTrack) return;
+    if (!armedTrack) {
+      // Auto-arm the selected track, or the first track
+      const targetId = selected || tracks[0]?.id;
+      if (targetId) {
+        setTracks(prev => prev.map(t => ({ ...t, armed: t.id === targetId })));
+        // Retry after state update
+        setTimeout(() => startStudioRecording(), 100);
+        return;
+      }
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
       mediaRecorderRef.current = recorder;
       chunksRef.current = [];
+
+      // Live input monitoring — connect mic to analyser for visual feedback
+      const audioCtx = audioCtxRef.current || new AudioContext();
+      audioCtxRef.current = audioCtx;
+      const source = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      // Store analyser for level metering
+      (window as unknown as Record<string, unknown>).__recAnalyser = analyser;
+
       recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
       recorder.onstop = async () => {
         stream.getTracks().forEach(t => t.stop());
+        (window as unknown as Record<string, unknown>).__recAnalyser = null;
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-        // Upload to Supabase
+        if (blob.size < 1000) return; // Too short, discard
+
         const file = new File([blob], `studio-rec-${Date.now()}.webm`, { type: 'audio/webm' });
         const formData = new FormData();
         formData.append('file', file);
@@ -226,17 +249,23 @@ export default function StudioPage() {
               t.id === armedTrack.id ? { ...t, audioUrl: data.audio_url, waveform: wave(), armed: false } : t
             ));
           }
-        } catch { /* ignore */ }
+        } catch (err) { console.error('Upload failed:', err); }
       };
-      recorder.start();
+      recorder.start(100); // Collect data every 100ms for responsiveness
       setRecordingTrackId(armedTrack.id);
       setRecording(true);
       setPlaying(true);
-    } catch { /* mic denied */ }
+    } catch (err) {
+      console.error('Mic access denied:', err);
+      // Show visual feedback
+      setRecording(false);
+    }
   }
 
   function stopStudioRecording() {
-    mediaRecorderRef.current?.stop();
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
     setRecordingTrackId(null);
     setRecording(false);
   }
@@ -457,7 +486,10 @@ export default function StudioPage() {
             {tracks.map((track) => (
               <div key={track.id}
                 onClick={() => setSelected(track.id)}
-                className={`flex h-[72px] border-b border-white/[0.03] group cursor-pointer transition-colors ${selected === track.id ? 'bg-white/[0.025]' : 'hover:bg-white/[0.015]'}`}>
+                className={`flex h-[72px] border-b border-white/[0.03] group cursor-pointer transition-colors ${
+                  recordingTrackId === track.id ? 'bg-red-500/[0.06] ring-1 ring-inset ring-red-500/20' :
+                  selected === track.id ? 'bg-white/[0.025]' : 'hover:bg-white/[0.015]'
+                }`}>
 
                 {/* Track header */}
                 <div className="w-52 flex-shrink-0 border-r border-white/5 px-2 py-1.5 flex flex-col justify-between">
@@ -477,7 +509,8 @@ export default function StudioPage() {
                     <button onClick={(e) => { e.stopPropagation(); upd(track.id, { solo: !track.solo }); }}
                       className={`text-[8px] w-5 h-4 rounded font-bold flex items-center justify-center ${track.solo ? 'bg-yellow-500/30 text-yellow-400' : 'bg-white/5 text-gray-600'}`}>S</button>
                     <button onClick={(e) => { e.stopPropagation(); upd(track.id, { armed: !track.armed }); }}
-                      className={`text-[8px] w-5 h-4 rounded font-bold flex items-center justify-center ${track.armed ? 'bg-red-600 text-white' : 'bg-white/5 text-gray-600'}`}>R</button>
+                      className={`text-[8px] w-5 h-4 rounded font-bold flex items-center justify-center transition-all ${track.armed ? 'bg-red-600 text-white animate-pulse ring-1 ring-red-400/50' : 'bg-white/5 text-gray-600 hover:text-red-400'}`}
+                      title={track.armed ? 'Disarm track' : 'Arm for recording'}>R</button>
                     <input type="range" min={0} max={100} value={track.volume}
                       onChange={(e) => upd(track.id, { volume: parseInt(e.target.value) })}
                       className="w-16 accent-purple-500 ml-auto" style={{ height: 3 }} />
@@ -501,9 +534,15 @@ export default function StudioPage() {
                       </div>
                     </div>
                   )}
-                  {track.waveform.length === 0 && (
+                  {track.waveform.length === 0 && recordingTrackId === track.id && (
+                    <div className="absolute inset-0 flex items-center justify-center gap-2">
+                      <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                      <span className="text-[10px] text-red-400 font-medium animate-pulse">RECORDING...</span>
+                    </div>
+                  )}
+                  {track.waveform.length === 0 && recordingTrackId !== track.id && (
                     <div className="absolute inset-0 flex items-center justify-center">
-                      <span className="text-[9px] text-gray-800">Drop audio or record</span>
+                      <span className="text-[9px] text-gray-800">{track.armed ? 'Armed — hit Record' : 'Drop audio or record'}</span>
                     </div>
                   )}
                   {/* Playhead */}
