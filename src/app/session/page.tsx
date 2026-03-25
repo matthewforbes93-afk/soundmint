@@ -566,6 +566,74 @@ export default function SessionPage() {
               <Wand2 className="w-4 h-4" /> AI Beat
             </button>
             </div>{/* close flex row */}
+
+            {/* AI Full Song option */}
+            <button onClick={async () => {
+              if (!artistName.trim() || !songTitle.trim()) return toast.error('Enter name and title');
+              setPhase('creating');
+              try {
+                // Generate full song with vocals via Suno-style prompt
+                const prompt = lyrics
+                  ? `${genre} ${mood} ${bpm} BPM song with vocals singing: ${lyrics.slice(0, 200)}`
+                  : `${genre} ${mood} ${bpm} BPM song with vocals, catchy melody, about ${songTitle}`;
+                const res = await fetch('/api/tracks', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    genre, mood, prompt,
+                    artist_name: artistName,
+                    ai_provider: 'suno',
+                    with_vocals: true,
+                    lyrics: lyrics || undefined,
+                  }),
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                  // Suno not available — fall back to MusicGen instrumental
+                  toast.error('Full song AI not configured — generating instrumental');
+                  const fallback = await fetch('/api/tracks', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ genre, mood, prompt: `${genre} ${mood} ${bpm} BPM instrumental`, artist_name: artistName, ai_provider: 'musicgen' }),
+                  });
+                  const fbData = await fallback.json();
+                  if (!fallback.ok) throw new Error(fbData.error);
+                  // Poll fallback
+                  const poll = setInterval(async () => {
+                    const check = await fetch(`/api/tracks/${fbData.id}`);
+                    const track = await check.json();
+                    if (track.status === 'ready' && track.audio_url) { clearInterval(poll); setBeatUrl(track.audio_url); setPhase('booth'); toast.success('Beat ready'); }
+                    else if (track.status === 'failed') { clearInterval(poll); setPhase('booth'); setTimeout(startBeat, 200); toast.error('Using instant beat'); }
+                  }, 5000);
+                  return;
+                }
+                // Poll for full song
+                const poll = setInterval(async () => {
+                  const check = await fetch(`/api/tracks/${data.id}`);
+                  const track = await check.json();
+                  if (track.status === 'ready' && track.audio_url) {
+                    clearInterval(poll);
+                    setVocalUrl(track.audio_url); // Full song goes to vocal slot
+                    setPhase('mix'); // Skip booth — song is already complete
+                    toast.success('Full song created!');
+                  } else if (track.status === 'failed') {
+                    clearInterval(poll);
+                    toast.error('Full song failed — entering studio');
+                    setPhase('booth');
+                    setTimeout(startBeat, 200);
+                  }
+                }, 5000);
+              } catch {
+                toast.error('Failed — using instant beat');
+                setPhase('booth');
+                setTimeout(startBeat, 200);
+              }
+            }}
+              disabled={!artistName.trim() || !songTitle.trim()}
+              className="w-full bg-purple-600/20 hover:bg-purple-600/30 disabled:opacity-30 text-purple-300 font-medium py-3 rounded-xl flex items-center justify-center gap-2 border border-purple-500/20 transition-all text-sm">
+              <Wand2 className="w-4 h-4" /> AI Full Song (vocals + beat)
+              <span className="text-[9px] text-purple-500 ml-1">requires Suno API</span>
+            </button>
           </div>
         </div>
       )}
