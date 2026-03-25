@@ -4,6 +4,31 @@
  * No AI, no server, no waiting. Pure client-side.
  */
 
+// Randomize a pattern — add/remove hits with probability
+function varyPattern(base: boolean[], prob: number = 0.15): boolean[] {
+  return base.map((v, i) => {
+    if (Math.random() < prob) return !v; // Flip some beats
+    return v;
+  });
+}
+
+// Add swing — delay every other hit slightly
+function addSwing(pattern: boolean[], amount: number = 0.3): boolean[] {
+  // Swing is handled in timing, not pattern — return as-is
+  return pattern;
+}
+
+// Generate a unique variation of a genre pattern
+function generateVariation(genre: string): Record<string, boolean[]> {
+  const base = DRUM_PATTERNS[genre] || DRUM_PATTERNS['hip-hop'];
+  return {
+    kick: varyPattern(base.kick, 0.1),
+    snare: [...base.snare], // Keep snare consistent
+    hihat: varyPattern(base.hihat, 0.2),
+    clap: varyPattern(base.clap, 0.15),
+  };
+}
+
 // Drum patterns by genre
 const DRUM_PATTERNS: Record<string, Record<string, boolean[]>> = {
   'hip-hop': {
@@ -86,12 +111,13 @@ export class BeatPlayer {
   }
 
   private playKick() {
+    const vel = 0.6 + Math.random() * 0.3; // Velocity variation
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
     osc.connect(gain); gain.connect(this.masterGain);
-    osc.frequency.setValueAtTime(150, this.ctx.currentTime);
+    osc.frequency.setValueAtTime(140 + Math.random() * 20, this.ctx.currentTime);
     osc.frequency.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.5);
-    gain.gain.setValueAtTime(0.8, this.ctx.currentTime);
+    gain.gain.setValueAtTime(vel, this.ctx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.5);
     osc.start(); osc.stop(this.ctx.currentTime + 0.5);
   }
@@ -187,7 +213,8 @@ export class BeatPlayer {
     if (this.intervalId) return;
     if (this.ctx.state === 'suspended') this.ctx.resume();
 
-    const pattern = DRUM_PATTERNS[this.config.genre] || DRUM_PATTERNS['hip-hop'];
+    // Generate a unique variation each time
+    const pattern = generateVariation(this.config.genre);
     const msPerStep = (60 / this.config.bpm / 4) * 1000;
     this.step = 0;
 

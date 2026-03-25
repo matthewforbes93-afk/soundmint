@@ -151,6 +151,47 @@ export default function SessionPage() {
       source.connect(analyser);
       analyserRef.current = analyser;
 
+      // ═══ LIVE MONITORING — hear yourself with effects while recording ═══
+      const preset = VOCAL_PRESETS[vocalPreset] || VOCAL_PRESETS.raw;
+      const tune = AUTOTUNE_PRESETS[autotunePreset] || AUTOTUNE_PRESETS.off;
+
+      // Build live monitoring chain: mic → EQ → comp → gain → effects → output
+      const monEqLow = ctx.createBiquadFilter(); monEqLow.type = 'lowshelf'; monEqLow.frequency.value = 300; monEqLow.gain.value = preset.eq[0];
+      const monEqMid = ctx.createBiquadFilter(); monEqMid.type = 'peaking'; monEqMid.frequency.value = 1500; monEqMid.Q.value = 1; monEqMid.gain.value = preset.eq[1];
+      const monEqHigh = ctx.createBiquadFilter(); monEqHigh.type = 'highshelf'; monEqHigh.frequency.value = 4000; monEqHigh.gain.value = preset.eq[2];
+      const monComp = ctx.createDynamicsCompressor();
+      monComp.threshold.value = -24 + (preset.comp / 100) * 20; monComp.ratio.value = 4;
+      const monGain = ctx.createGain(); monGain.gain.value = 0.8;
+
+      source.connect(monEqLow); monEqLow.connect(monEqMid); monEqMid.connect(monEqHigh);
+      monEqHigh.connect(monComp); monComp.connect(monGain);
+
+      // Add autotune to monitoring
+      if (tune.speed > 0) {
+        const dryG = ctx.createGain(); dryG.gain.value = 1 - tune.chorusDepth * 0.4;
+        monGain.connect(dryG); dryG.connect(ctx.destination);
+        [tune.detune, -tune.detune].forEach(cents => {
+          const del = ctx.createDelay(); del.delayTime.value = 0.003;
+          const sG = ctx.createGain(); sG.gain.value = tune.chorusDepth;
+          const lfo = ctx.createOscillator(); const lfoG = ctx.createGain();
+          lfo.frequency.value = 0.5 + tune.speed * 3; lfoG.gain.value = cents / 12000;
+          lfo.connect(lfoG); lfoG.connect(del.delayTime); lfo.start();
+          monGain.connect(del); del.connect(sG); sG.connect(ctx.destination);
+        });
+      } else {
+        monGain.connect(ctx.destination);
+      }
+
+      // Reverb on monitoring
+      if (preset.reverb > 0) {
+        const rG = ctx.createGain(); rG.gain.value = preset.reverb / 150;
+        const d1 = ctx.createDelay(); d1.delayTime.value = 0.02;
+        const d2 = ctx.createDelay(); d2.delayTime.value = 0.04;
+        const fb = ctx.createGain(); fb.gain.value = 0.2;
+        monGain.connect(d1); d1.connect(d2); d2.connect(fb); fb.connect(d1);
+        d1.connect(rG); d2.connect(rG); rG.connect(ctx.destination);
+      }
+
       // Start visualizer
       const vizTick = () => {
         const data = new Uint8Array(analyser.frequencyBinCount);
