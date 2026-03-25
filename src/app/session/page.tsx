@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Mic, Play, Pause, Square, Download, Check, ChevronRight,
-  PenTool, Radio, Grid3X3, Loader2, RotateCcw, Zap, X
+  PenTool, Radio, Grid3X3, Loader2, RotateCcw, Zap, X, Wand2
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { BeatPlayer, type BeatConfig } from '@/lib/beatFactory';
@@ -100,6 +100,7 @@ export default function SessionPage() {
   const [spacePreset, setSpacePreset] = useState('room');
   const [beatVolume, setBeatVolume] = useState(70);
   const [vocalVolume, setVocalVolume] = useState(100);
+  const [beatUrl, setBeatUrl] = useState<string | null>(null);
   const [vocalUrl, setVocalUrl] = useState<string | null>(null);
   const [exportUrl, setExportUrl] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -125,18 +126,30 @@ export default function SessionPage() {
     }
   }
 
-  // Start instant beat
+  // Start beat — AI audio or instant synthesis
   function startBeat() {
-    beatPlayerRef.current?.destroy();
-    const keys = ['C','D','E','F','G','A'];
-    beatPlayerRef.current = new BeatPlayer({ genre, mood, bpm, key: keys[Math.floor(Math.random() * keys.length)] });
-    beatPlayerRef.current.setVolume(beatVolume / 100);
-    beatPlayerRef.current.start();
+    if (beatUrl) {
+      // Play AI-generated beat
+      const el = document.getElementById('aiBeatAudio') as HTMLAudioElement | null;
+      if (el) { el.volume = beatVolume / 100; el.currentTime = 0; el.play(); }
+    } else {
+      // Instant synthesis
+      beatPlayerRef.current?.destroy();
+      const keys = ['C','D','E','F','G','A'];
+      beatPlayerRef.current = new BeatPlayer({ genre, mood, bpm, key: keys[Math.floor(Math.random() * keys.length)] });
+      beatPlayerRef.current.setVolume(beatVolume / 100);
+      beatPlayerRef.current.start();
+    }
     setIsPlaying(true);
   }
 
   function stopBeat() {
-    beatPlayerRef.current?.stop();
+    if (beatUrl) {
+      const el = document.getElementById('aiBeatAudio') as HTMLAudioElement | null;
+      if (el) el.pause();
+    } else {
+      beatPlayerRef.current?.stop();
+    }
     setIsPlaying(false);
   }
 
@@ -494,29 +507,91 @@ export default function SessionPage() {
                 className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder:text-gray-700 focus:outline-none focus:border-teal-500/50 text-sm leading-relaxed" />
             )}
 
+            <div className="flex gap-3">
             <button onClick={async () => {
               if (!artistName.trim() || !songTitle.trim()) return toast.error('Enter name and title');
               if (door === 'build') { window.location.href = '/studio'; return; }
-              // Request mic permission NOW before entering booth
               try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                stream.getTracks().forEach(t => t.stop()); // Release immediately, just getting permission
+                stream.getTracks().forEach(t => t.stop());
               } catch { toast.error('Mic access needed to record'); return; }
               setPhase('booth');
-              // Beat auto-plays when booth opens
               setTimeout(startBeat, 200);
             }}
               disabled={!artistName.trim() || !songTitle.trim()}
-              className="w-full bg-teal-600 hover:bg-teal-700 disabled:opacity-30 text-white font-medium py-4 rounded-xl flex items-center justify-center gap-2 text-lg transition-all">
-              <Zap className="w-5 h-5" /> Enter Studio
+              className="flex-1 bg-teal-600 hover:bg-teal-700 disabled:opacity-30 text-white font-medium py-4 rounded-xl flex items-center justify-center gap-2 text-lg transition-all">
+              <Zap className="w-5 h-5" /> Instant Beat
             </button>
+            <button onClick={async () => {
+              if (!artistName.trim() || !songTitle.trim()) return toast.error('Enter name and title');
+              // Request mic early
+              try {
+                const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+                s.getTracks().forEach(t => t.stop());
+              } catch { toast.error('Mic access needed'); return; }
+              // Generate AI beat
+              setPhase('creating');
+              try {
+                const res = await fetch('/api/tracks', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ genre, mood, prompt: `${genre} ${mood} ${bpm} BPM instrumental`, artist_name: artistName, ai_provider: 'musicgen' }),
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error);
+                // Poll for completion
+                const poll = setInterval(async () => {
+                  const check = await fetch(`/api/tracks/${data.id}`);
+                  const track = await check.json();
+                  if (track.status === 'ready' && track.audio_url) {
+                    clearInterval(poll);
+                    setBeatUrl(track.audio_url);
+                    setPhase('booth');
+                    toast.success('AI beat ready!');
+                  } else if (track.status === 'failed') {
+                    clearInterval(poll);
+                    toast.error('Generation failed — using instant beat');
+                    setPhase('booth');
+                    setTimeout(startBeat, 200);
+                  }
+                }, 5000);
+              } catch {
+                toast.error('AI failed — using instant beat');
+                setPhase('booth');
+                setTimeout(startBeat, 200);
+              }
+            }}
+              disabled={!artistName.trim() || !songTitle.trim()}
+              className="flex-1 bg-white/5 hover:bg-white/10 disabled:opacity-30 text-gray-300 font-medium py-4 rounded-xl flex items-center justify-center gap-2 border border-white/10 transition-all">
+              <Wand2 className="w-4 h-4" /> AI Beat
+            </button>
+            </div>{/* close flex row */}
           </div>
+        </div>
+      )}
+
+      {/* ═══ AI CREATING ═══ */}
+      {phase === 'creating' && (
+        <div className="relative z-10 text-center px-6">
+          <div className="w-20 h-20 rounded-full bg-teal-500/10 flex items-center justify-center mx-auto mb-6">
+            <Loader2 className="w-10 h-10 text-teal-400 animate-spin" />
+          </div>
+          <h2 className="text-2xl font-bold mb-2">Creating Your Beat</h2>
+          <p className="text-gray-500 text-sm mb-2">{genre} · {mood} · {bpm} BPM</p>
+          <p className="text-gray-700 text-xs">AI is composing — this takes 2-3 minutes...</p>
+          <button onClick={() => { setPhase('booth'); setTimeout(startBeat, 200); toast.success('Switched to instant beat'); }}
+            className="mt-8 text-xs text-gray-600 hover:text-teal-400 transition-colors underline">
+            Skip — use instant beat instead
+          </button>
         </div>
       )}
 
       {/* ═══ THE BOOTH ═══ */}
       {phase === 'booth' && (
         <div className="relative z-10 w-full max-w-lg px-6 text-center">
+          {/* AI beat audio element */}
+          {beatUrl && <audio id="aiBeatAudio" src={beatUrl} loop />}
+
           {/* Song info */}
           <div className="mb-6">
             <h2 className="text-2xl font-bold tracking-tight">{songTitle}</h2>
