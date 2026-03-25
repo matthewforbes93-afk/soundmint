@@ -8,10 +8,10 @@ import TrackCard from '@/components/TrackCard';
 import { Music, Upload, BarChart3, DollarSign, Wand2, Sliders, Mic, Library, Disc3, Zap } from 'lucide-react';
 
 const quickActions = [
-  { href: '/studio', label: 'Open Studio', desc: 'Mix, master & produce', icon: Sliders, color: 'from-teal-600 to-emerald-600' },
-  { href: '/playground', label: 'AI Generate', desc: 'Create music with AI', icon: Wand2, color: 'from-cyan-600 to-teal-600' },
-  { href: '/recorder', label: 'Quick Record', desc: 'Capture an idea now', icon: Mic, color: 'from-emerald-600 to-green-600' },
-  { href: '/library', label: 'Sound Library', desc: 'Browse samples & loops', icon: Library, color: 'from-violet-600 to-purple-600' },
+  { href: '/studio', label: 'Open Studio', desc: 'Full DAW — compose, record, mix, master', icon: Sliders, color: 'from-teal-600 to-emerald-600' },
+  { href: '/recorder', label: 'Quick Record', desc: 'Capture an idea instantly', icon: Mic, color: 'from-emerald-600 to-green-600' },
+  { href: '/marketplace', label: 'Marketplace', desc: 'Sell beats & license tracks', icon: DollarSign, color: 'from-violet-600 to-purple-600' },
+  { href: '/collaborate', label: 'Collaborate', desc: 'Share sessions & invite artists', icon: Library, color: 'from-cyan-600 to-teal-600' },
 ];
 
 export default function HomePage() {
