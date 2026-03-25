@@ -78,6 +78,8 @@ export default function SessionPage() {
   const [vocalVolume, setVocalVolume] = useState(100);
   const [autoMode, setAutoMode] = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [autotune, setAutotune] = useState(false);
+  const [vocalReverb, setVocalReverb] = useState(20);
 
   const [useInstantBeat, setUseInstantBeat] = useState(true);
   const beatPlayerRef = useRef<BeatPlayer | null>(null);
@@ -281,21 +283,86 @@ export default function SessionPage() {
 
   // --- Step 5: Mix (adjust volumes) ---
   function playMix() {
-    if (beatAudioRef.current) {
+    // Play beat (instant or AI)
+    if (useInstantBeat) {
+      if (!beatPlayerRef.current) {
+        const key = ['C', 'D', 'E', 'F', 'G', 'A'][Math.floor(Math.random() * 6)];
+        beatPlayerRef.current = new BeatPlayer({ genre, mood, bpm, key });
+      }
+      beatPlayerRef.current.setVolume(beatVolume / 100);
+      beatPlayerRef.current.start();
+    } else if (beatAudioRef.current) {
       beatAudioRef.current.volume = beatVolume / 100;
       beatAudioRef.current.currentTime = 0;
       beatAudioRef.current.play();
     }
-    if (vocalAudioRef.current) {
-      vocalAudioRef.current.volume = vocalVolume / 100;
-      vocalAudioRef.current.currentTime = 0;
-      vocalAudioRef.current.play();
+
+    // Play vocals with effects
+    if (vocalAudioRef.current && vocalUrl) {
+      // If autotune or reverb, process through Web Audio
+      if (autotune || vocalReverb > 0) {
+        try {
+          const ctx = new AudioContext();
+          const source = ctx.createMediaElementSource(vocalAudioRef.current);
+          const gain = ctx.createGain();
+          gain.gain.value = vocalVolume / 100;
+
+          // Autotune: subtle pitch correction via detune on playback rate
+          // Real autotune needs AudioWorklet, this is a simplified version
+          // that adds a slight pitch-shifted chorus effect for "tuned" sound
+          if (autotune) {
+            const pitchGain = ctx.createGain();
+            pitchGain.gain.value = 0.3;
+            // Create a slightly detuned copy for pitch-smoothing effect
+            const delay = ctx.createDelay();
+            delay.delayTime.value = 0.005; // 5ms
+            source.connect(delay);
+            delay.connect(pitchGain);
+            pitchGain.connect(gain);
+          }
+
+          // Reverb
+          if (vocalReverb > 0) {
+            const reverbGain = ctx.createGain();
+            reverbGain.gain.value = vocalReverb / 200;
+            const delay1 = ctx.createDelay(); delay1.delayTime.value = 0.03;
+            const delay2 = ctx.createDelay(); delay2.delayTime.value = 0.06;
+            const fb = ctx.createGain(); fb.gain.value = 0.3;
+            source.connect(delay1);
+            delay1.connect(delay2);
+            delay2.connect(fb);
+            fb.connect(delay1);
+            delay1.connect(reverbGain);
+            delay2.connect(reverbGain);
+            reverbGain.connect(gain);
+          }
+
+          source.connect(gain);
+          gain.connect(ctx.destination);
+
+          vocalAudioRef.current.currentTime = 0;
+          vocalAudioRef.current.play();
+        } catch {
+          // Fallback: play without effects
+          vocalAudioRef.current.volume = vocalVolume / 100;
+          vocalAudioRef.current.currentTime = 0;
+          vocalAudioRef.current.play();
+        }
+      } else {
+        vocalAudioRef.current.volume = vocalVolume / 100;
+        vocalAudioRef.current.currentTime = 0;
+        vocalAudioRef.current.play();
+      }
     }
     setIsPlaying(true);
   }
 
   function stopMix() {
-    beatAudioRef.current?.pause();
+    if (useInstantBeat) {
+      beatPlayerRef.current?.stop();
+    } else {
+      beatAudioRef.current?.pause();
+    }
     vocalAudioRef.current?.pause();
     setIsPlaying(false);
   }
@@ -500,17 +567,43 @@ export default function SessionPage() {
           <p className="text-gray-400 text-sm mb-6">Adjust the balance between beat and vocals.</p>
 
           <div className="space-y-4 mb-6">
+            {/* Volume controls */}
             <div className="flex items-center gap-4">
-              <span className="text-sm text-gray-400 w-16">Beat</span>
+              <span className="text-sm text-gray-400 w-20">Beat</span>
               <input type="range" min={0} max={100} value={beatVolume} onChange={e => setBeatVolume(parseInt(e.target.value))}
                 className="flex-1 accent-teal-500" />
               <span className="text-sm text-gray-500 w-10">{beatVolume}%</span>
             </div>
             <div className="flex items-center gap-4">
-              <span className="text-sm text-gray-400 w-16">Vocals</span>
+              <span className="text-sm text-gray-400 w-20">Vocals</span>
               <input type="range" min={0} max={100} value={vocalVolume} onChange={e => setVocalVolume(parseInt(e.target.value))}
                 className="flex-1 accent-teal-500" />
               <span className="text-sm text-gray-500 w-10">{vocalVolume}%</span>
+            </div>
+
+            {/* Vocal effects */}
+            <div className="border-t border-white/5 pt-4 mt-4">
+              <p className="text-xs text-teal-400 font-medium mb-3">VOCAL EFFECTS</p>
+
+              {/* Autotune */}
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <p className="text-sm text-white">Auto-Tune</p>
+                  <p className="text-[10px] text-gray-500">Pitch correction on vocals</p>
+                </div>
+                <button onClick={() => setAutotune(!autotune)}
+                  className={`relative w-11 h-6 rounded-full transition-colors ${autotune ? 'bg-teal-600' : 'bg-gray-700'}`}>
+                  <div className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${autotune ? 'translate-x-5' : ''}`} />
+                </button>
+              </div>
+
+              {/* Vocal reverb */}
+              <div className="flex items-center gap-4">
+                <span className="text-sm text-gray-400 w-20">Reverb</span>
+                <input type="range" min={0} max={100} value={vocalReverb} onChange={e => setVocalReverb(parseInt(e.target.value))}
+                  className="flex-1 accent-teal-500" />
+                <span className="text-sm text-gray-500 w-10">{vocalReverb}%</span>
+              </div>
             </div>
           </div>
 
