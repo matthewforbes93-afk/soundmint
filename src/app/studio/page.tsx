@@ -1,12 +1,15 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import {
-  Play, Pause, Square, SkipBack, CircleDot, Repeat,
+  Play, Pause, Square, SkipBack, CircleDot, Repeat, Undo2, Redo2,
   Plus, Trash2, Wand2, Mic, Piano, Headphones, Settings2,
   Volume2, ChevronDown, ChevronUp, Save, Download, Upload,
-  Activity, Music, Layers, Sliders as SlidersIcon
+  Activity, Music, Layers, Sliders as SlidersIcon, Drum, Keyboard
 } from 'lucide-react';
+import Synth from '@/components/Synth';
+import DrumMachine from '@/components/DrumMachine';
+import PianoRoll from '@/components/PianoRoll';
 
 // ─── Types ───
 interface TrackLane {
@@ -163,7 +166,7 @@ export default function StudioPage() {
   const [looping, setLooping] = useState(false);
   const [pos, setPos] = useState(0); // seconds
   const [selected, setSelected] = useState<string | null>(null);
-  const [bottomTab, setBottomTab] = useState<'mixer' | 'fx' | 'browser'>('mixer');
+  const [bottomTab, setBottomTab] = useState<'mixer' | 'fx' | 'browser' | 'synth' | 'drums' | 'piano'>('mixer');
   const [zoom, setZoom] = useState(1);
   const [meters, setMeters] = useState<Record<string, [number, number]>>({});
   const animRef = useRef(0);
@@ -353,8 +356,10 @@ export default function StudioPage() {
           <span className="text-[9px] text-gray-600">Zoom</span>
           <input type="range" min={0.3} max={3} step={0.1} value={zoom} onChange={(e) => setZoom(parseFloat(e.target.value))}
             className="w-16 accent-purple-500" />
-          <button className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5"><Save className="w-3.5 h-3.5" /></button>
-          <button className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5"><Download className="w-3.5 h-3.5" /></button>
+          <button onClick={() => { /* undo */ }} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5" title="Undo"><Undo2 className="w-3.5 h-3.5" /></button>
+          <button onClick={() => { /* redo */ }} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5" title="Redo"><Redo2 className="w-3.5 h-3.5" /></button>
+          <button className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5" title="Save"><Save className="w-3.5 h-3.5" /></button>
+          <button className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5" title="Export"><Download className="w-3.5 h-3.5" /></button>
         </div>
       </div>
 
@@ -461,6 +466,9 @@ export default function StudioPage() {
           {[
             { id: 'mixer' as const, label: 'Mixer', icon: SlidersIcon },
             { id: 'fx' as const, label: 'Effects', icon: Activity },
+            { id: 'synth' as const, label: 'Synth', icon: Keyboard },
+            { id: 'drums' as const, label: 'Drums', icon: Drum },
+            { id: 'piano' as const, label: 'Piano Roll', icon: Piano },
             { id: 'browser' as const, label: 'Sounds', icon: Music },
           ].map(({ id, label, icon: Icon }) => (
             <button key={id} onClick={() => setBottomTab(id)}
@@ -603,6 +611,27 @@ export default function StudioPage() {
                 </button>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* SYNTH */}
+        {bottomTab === 'synth' && (
+          <div className="h-56 overflow-auto p-2">
+            <Synth />
+          </div>
+        )}
+
+        {/* DRUMS */}
+        {bottomTab === 'drums' && (
+          <div className="h-56 overflow-auto p-2">
+            <DrumMachine bpm={bpm} />
+          </div>
+        )}
+
+        {/* PIANO ROLL */}
+        {bottomTab === 'piano' && (
+          <div className="h-56 overflow-auto p-2">
+            <PianoRoll bpm={bpm} />
           </div>
         )}
       </div>
