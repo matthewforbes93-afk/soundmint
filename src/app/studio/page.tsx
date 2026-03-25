@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Play, Pause, Square, SkipBack, CircleDot, Repeat, Undo2, Redo2,
   Plus, Trash2, Wand2, Mic, Piano, Headphones, Settings2,
@@ -11,6 +11,7 @@ import Synth from '@/components/Synth';
 import DrumMachine from '@/components/DrumMachine';
 import PianoRoll from '@/components/PianoRoll';
 import ArrangementMarkers from '@/components/ArrangementMarkers';
+import AutomationLane from '@/components/AutomationLane';
 import ExportDialog from '@/components/ExportDialog';
 import { useMetronome } from '@/lib/useMetronome';
 import { useKeyboardShortcuts } from '@/lib/useKeyboardShortcuts';
@@ -29,6 +30,9 @@ interface TrackLane {
   audioUrl: string | null;
   waveform: number[];
   effects: { eq: [number, number, number]; comp: number; reverb: number; delay: number; chorus: number };
+  showAutomation: boolean;
+  automationParam: 'volume' | 'pan' | 'reverb';
+  automationPoints: { bar: number; value: number }[];
 }
 
 // SoundMint palette — mint, teal, emerald, purple accents
@@ -53,6 +57,9 @@ function mkTrack(name: string, i: number, type: TrackLane['type'] = 'audio', has
     volume: 80, pan: 0, mute: false, solo: false, armed: false,
     audioUrl: null, waveform: hasWave ? wave() : [],
     effects: { eq: [0, 0, 0], comp: 0, reverb: 0, delay: 0, chorus: 0 },
+    showAutomation: false,
+    automationParam: 'volume',
+    automationPoints: [],
   };
 }
 
@@ -182,7 +189,16 @@ export default function StudioPage() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const audioCtxRef = useRef<AudioContext | null>(null);
-  const audioSourcesRef = useRef<Record<string, { source: AudioBufferSourceNode | null; gain: GainNode; pan: StereoPannerNode }>>({});
+  const audioSourcesRef = useRef<Record<string, {
+    source: AudioBufferSourceNode | null;
+    gain: GainNode;
+    pan: StereoPannerNode;
+    eqLow: BiquadFilterNode;
+    eqMid: BiquadFilterNode;
+    eqHigh: BiquadFilterNode;
+    compressor: DynamicsCompressorNode;
+    reverb: GainNode; // dry/wet mix for reverb send
+  }>>({});
   const metronome = useMetronome();
 
   // Keyboard shortcuts
@@ -332,14 +348,28 @@ export default function StudioPage() {
     }
   }, [initialized]);
 
-  // Update audio nodes when track settings change
+  // Update ALL audio nodes in real-time when track settings change
   useEffect(() => {
     tracks.forEach(track => {
       const nodes = audioSourcesRef.current[track.id];
-      if (nodes) {
-        nodes.gain.gain.value = track.mute ? 0 : track.volume / 100;
-        nodes.pan.pan.value = track.pan / 100;
-      }
+      if (!nodes) return;
+
+      // Volume + mute
+      nodes.gain.gain.value = track.mute ? 0 : track.volume / 100;
+
+      // Pan
+      nodes.pan.pan.value = track.pan / 100;
+
+      // EQ (real-time)
+      nodes.eqLow.gain.value = track.effects.eq[0];
+      nodes.eqMid.gain.value = track.effects.eq[1];
+      nodes.eqHigh.gain.value = track.effects.eq[2];
+
+      // Compressor threshold (real-time)
+      nodes.compressor.threshold.value = -24 + (track.effects.comp / 100) * 24;
+
+      // Reverb send level (real-time)
+      nodes.reverb.gain.value = track.effects.reverb / 100;
     });
   }, [tracks]);
 
@@ -364,17 +394,64 @@ export default function StudioPage() {
           const gain = ctx.createGain();
           const pan = ctx.createStereoPanner();
 
+          // EQ: 3-band (low shelf, peaking mid, high shelf)
+          const eqLow = ctx.createBiquadFilter();
+          eqLow.type = 'lowshelf';
+          eqLow.frequency.value = 320;
+          eqLow.gain.value = track.effects.eq[0];
+
+          const eqMid = ctx.createBiquadFilter();
+          eqMid.type = 'peaking';
+          eqMid.frequency.value = 1000;
+          eqMid.Q.value = 1;
+          eqMid.gain.value = track.effects.eq[1];
+
+          const eqHigh = ctx.createBiquadFilter();
+          eqHigh.type = 'highshelf';
+          eqHigh.frequency.value = 3200;
+          eqHigh.gain.value = track.effects.eq[2];
+
+          // Compressor
+          const compressor = ctx.createDynamicsCompressor();
+          compressor.threshold.value = -24 + (track.effects.comp / 100) * 24; // 0 = -24dB, 100 = 0dB
+          compressor.ratio.value = 4;
+          compressor.attack.value = 0.003;
+          compressor.release.value = 0.25;
+
+          // Reverb send (simple delay-based)
+          const reverb = ctx.createGain();
+          reverb.gain.value = track.effects.reverb / 100;
+
           source.buffer = audioBuf;
           source.loop = true;
-          gain.gain.value = track.volume / 100;
+          gain.gain.value = track.mute ? 0 : track.volume / 100;
           pan.pan.value = track.pan / 100;
 
-          source.connect(gain);
+          // Chain: source → eqLow → eqMid → eqHigh → compressor → gain → pan → destination
+          source.connect(eqLow);
+          eqLow.connect(eqMid);
+          eqMid.connect(eqHigh);
+          eqHigh.connect(compressor);
+          compressor.connect(gain);
           gain.connect(pan);
           pan.connect(ctx.destination);
+
+          // Reverb send: source → reverb gain → delay → destination
+          if (track.effects.reverb > 0) {
+            const delay = ctx.createDelay();
+            delay.delayTime.value = 0.03;
+            const fbGain = ctx.createGain();
+            fbGain.gain.value = 0.4;
+            source.connect(reverb);
+            reverb.connect(delay);
+            delay.connect(fbGain);
+            fbGain.connect(delay); // feedback loop
+            delay.connect(ctx.destination);
+          }
+
           source.start(0);
 
-          audioSourcesRef.current[track.id] = { source, gain, pan };
+          audioSourcesRef.current[track.id] = { source, gain, pan, eqLow, eqMid, eqHigh, compressor, reverb };
         } catch (err) {
           console.error(`Failed to play track ${track.name}:`, err);
         }
@@ -444,44 +521,7 @@ export default function StudioPage() {
         {/* Transport buttons */}
         <div className="flex items-center gap-1">
           <button onClick={() => { setPlaying(false); setPos(0); }} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5"><SkipBack className="w-3.5 h-3.5" /></button>
-          <button onClick={() => {
-            const next = !playing;
-            if (next) {
-              // Create AudioContext if needed
-              if (!audioCtxRef.current) {
-                audioCtxRef.current = new AudioContext();
-              }
-              const ctx = audioCtxRef.current;
-              if (ctx.state === 'suspended') ctx.resume();
-              // For each track with audioUrl, load and play
-              tracks.forEach(async (track) => {
-                if (track.audioUrl && !track.mute) {
-                  try {
-                    const resp = await fetch(track.audioUrl);
-                    const buf = await resp.arrayBuffer();
-                    const audioBuf = await ctx.decodeAudioData(buf);
-                    const source = ctx.createBufferSource();
-                    source.buffer = audioBuf;
-                    const gain = ctx.createGain();
-                    gain.gain.value = track.volume / 100;
-                    const pan = ctx.createStereoPanner();
-                    pan.pan.value = track.pan / 100;
-                    source.connect(gain).connect(pan).connect(ctx.destination);
-                    source.start(0, pos);
-                    audioSourcesRef.current[track.id] = { source, gain, pan };
-                  } catch { /* no audio file yet */ }
-                }
-              });
-            } else {
-              // Stop all sources
-              Object.values(audioSourcesRef.current).forEach(({ source }) => {
-                try { source?.stop(); } catch { /* already stopped */ }
-              });
-              audioSourcesRef.current = {};
-            }
-            setPlaying(next);
-            setRecording(false);
-          }}
+          <button onClick={() => { setPlaying(!playing); setRecording(false); }}
             className={`w-9 h-9 flex items-center justify-center rounded-lg transition-all ${playing ? 'bg-gradient-to-b from-white to-gray-200 text-black shadow-lg shadow-white/10' : 'bg-white/10 text-white hover:bg-white/15'}`}>
             {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
           </button>
@@ -572,7 +612,8 @@ export default function StudioPage() {
           {/* Tracks */}
           <div className="flex-1 overflow-auto">
             {tracks.map((track) => (
-              <div key={track.id}
+              <React.Fragment key={track.id}>
+              <div
                 onClick={() => setSelected(track.id)}
                 className={`flex h-[72px] border-b border-white/[0.03] group cursor-pointer transition-colors ${
                   recordingTrackId === track.id ? 'bg-red-500/[0.06] ring-1 ring-inset ring-red-500/20' :
@@ -636,8 +677,27 @@ export default function StudioPage() {
                   {/* Playhead */}
                   <div className="absolute top-0 bottom-0 w-px bg-teal-400 z-10 pointer-events-none" style={{ left: playPx }} />
                 </div>
+
+                {/* Automation toggle */}
+                <button onClick={(e) => { e.stopPropagation(); upd(track.id, { showAutomation: !track.showAutomation }); }}
+                  className="absolute bottom-0.5 left-[210px] text-[7px] text-gray-700 hover:text-teal-400 z-20">
+                  {track.showAutomation ? '▼ Auto' : '▶ Auto'}
+                </button>
               </div>
-            ))}
+
+              {/* Automation Lane */}
+              {track.showAutomation && (
+                <AutomationLane
+                  label={`${track.name} → ${track.automationParam}`}
+                  color={track.color}
+                  points={track.automationPoints}
+                  totalBars={totalBars}
+                  pxPerBar={pxPerBar}
+                  onChange={(points) => upd(track.id, { automationPoints: points })}
+                />
+              )}
+            </React.Fragment>
+          ))}
 
             {/* Add track */}
             <div className="h-10 flex items-center border-b border-white/[0.03]">
