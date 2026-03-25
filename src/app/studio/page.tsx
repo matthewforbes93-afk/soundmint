@@ -230,7 +230,7 @@ export default function StudioPage() {
   // Keyboard shortcuts
   useKeyboardShortcuts({
     ' ': () => { setPlaying(p => !p); setRecording(false); },
-    'r': () => { setRecording(r => !r); if (!recording) setPlaying(true); },
+    'r': () => { if (recording) stopStudioRecording(); else startStudioRecording(); },
     'm': () => setMetronomeOn(m => !m),
     'cmd+z': undo,
     'cmd+shift+z': redo,
@@ -248,17 +248,16 @@ export default function StudioPage() {
 
   // In-studio recording
   async function startStudioRecording() {
-    const armedTrack = tracks.find(t => t.armed);
+    // Find armed track, or auto-arm the selected/first track
+    let armedTrack = tracks.find(t => t.armed);
     if (!armedTrack) {
-      // Auto-arm the selected track, or the first track
       const targetId = selected || tracks[0]?.id;
-      if (targetId) {
-        setTracks(prev => prev.map(t => ({ ...t, armed: t.id === targetId })));
-        // Retry after state update
-        setTimeout(() => startStudioRecording(), 100);
-        return;
-      }
-      return;
+      if (!targetId) return;
+      // Arm it directly in our local reference
+      armedTrack = tracks.find(t => t.id === targetId);
+      if (!armedTrack) return;
+      armedTrack = { ...armedTrack, armed: true };
+      setTracks(prev => prev.map(t => ({ ...t, armed: t.id === targetId })));
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
