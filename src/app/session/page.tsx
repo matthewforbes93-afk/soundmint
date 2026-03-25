@@ -425,6 +425,11 @@ export default function SessionPage() {
       {/* ═══ DOOR SELECT ═══ */}
       {phase === 'doors' && (
         <div className="relative z-10 text-center max-w-2xl px-6">
+          {/* Back to home */}
+          <a href="/" className="absolute top-0 left-6 flex items-center gap-2 text-gray-700 hover:text-white transition-colors text-xs">
+            <ChevronRight className="w-3 h-3 rotate-180" /> Home
+          </a>
+
           <h1 className="text-4xl font-bold mb-2 tracking-tight">
             Sound<span className="text-teal-400">Mint</span>
           </h1>
