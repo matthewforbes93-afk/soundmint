@@ -24,20 +24,24 @@ interface TrackLane {
   effects: { eq: [number, number, number]; comp: number; reverb: number; delay: number; chorus: number };
 }
 
-const COLORS = ['#ef4444','#3b82f6','#22c55e','#a855f7','#f59e0b','#ec4899','#06b6d4','#f97316','#6366f1','#14b8a6'];
+// SoundMint palette — mint, teal, emerald, purple accents
+const COLORS = ['#34d399','#2dd4bf','#a78bfa','#22d3ee','#4ade80','#818cf8','#67e8f9','#6ee7b7','#c084fc','#5eead4'];
 
 function wave(n: number = 300): number[] {
+  // Seeded pseudo-random for SSR/client consistency
+  let seed = n * 7 + 13;
+  const rand = () => { seed = (seed * 16807 + 0) % 2147483647; return (seed & 0x7fffffff) / 2147483647; };
   const w: number[] = [];
   for (let i = 0; i < n; i++) {
     const base = Math.sin(i * 0.05) * 0.3 + 0.5;
-    w.push(base + (Math.random() - 0.5) * 0.4);
+    w.push(base + (rand() - 0.5) * 0.4);
   }
   return w;
 }
 
 function mkTrack(name: string, i: number, type: TrackLane['type'] = 'audio', hasWave = false): TrackLane {
   return {
-    id: `t${Date.now()}${i}`,
+    id: `t-${i}-${name.replace(/\s/g, '')}`,
     name, color: COLORS[i % COLORS.length], type,
     volume: 80, pan: 0, mute: false, solo: false, armed: false,
     audioUrl: null, waveform: hasWave ? wave() : [],
@@ -54,7 +58,7 @@ function Meter({ value, peak = false, size = 'md' }: { value: number; peak?: boo
       {Array.from({ length: count }, (_, i) => {
         const pct = i / count;
         const on = pct < value;
-        let color = 'bg-emerald-500';
+        let color = 'bg-teal-500';
         if (pct > 0.85) color = 'bg-red-500';
         else if (pct > 0.7) color = 'bg-yellow-500';
         return <div key={i} className={`w-1.5 ${h} rounded-[1px] transition-opacity duration-75 ${on ? color : 'bg-white/5'}`} />;
@@ -69,7 +73,7 @@ function Knob({ value, onChange, label, color = 'purple', min = 0, max = 100 }: 
 }) {
   const pct = (value - min) / (max - min);
   const angle = -135 + pct * 270;
-  const colors: Record<string, string> = { purple: '#a855f7', blue: '#3b82f6', green: '#22c55e', yellow: '#f59e0b', pink: '#ec4899', cyan: '#06b6d4' };
+  const colors: Record<string, string> = { purple: '#a78bfa', blue: '#22d3ee', green: '#34d399', yellow: '#fbbf24', pink: '#f472b6', cyan: '#2dd4bf', mint: '#34d399', teal: '#2dd4bf' };
   const c = colors[color] || colors.purple;
 
   return (
@@ -250,11 +254,11 @@ export default function StudioPage() {
         <div className="flex items-center gap-0.5 bg-black/40 rounded-lg px-3 py-1 border border-white/5 font-mono">
           <div className="pr-3 border-r border-white/5">
             <p className="text-[8px] text-gray-600">BAR</p>
-            <p className="text-lg text-emerald-400 font-bold leading-none">{bar}<span className="text-emerald-400/40">.{beat}</span></p>
+            <p className="text-lg text-teal-400 font-bold leading-none">{bar}<span className="text-teal-400/40">.{beat}</span></p>
           </div>
           <div className="pl-3">
             <p className="text-[8px] text-gray-600">TIME</p>
-            <p className="text-lg text-emerald-400 font-bold leading-none">{mins}:{secs.padStart(4, '0')}</p>
+            <p className="text-lg text-teal-400 font-bold leading-none">{mins}:{secs.padStart(4, '0')}</p>
           </div>
         </div>
 
@@ -365,7 +369,7 @@ export default function StudioPage() {
                     </div>
                   )}
                   {/* Playhead */}
-                  <div className="absolute top-0 bottom-0 w-px bg-emerald-400 z-10 pointer-events-none" style={{ left: playPx }} />
+                  <div className="absolute top-0 bottom-0 w-px bg-teal-400 z-10 pointer-events-none" style={{ left: playPx }} />
                 </div>
               </div>
             ))}
@@ -416,17 +420,17 @@ export default function StudioPage() {
             ))}
 
             {/* MASTER channel */}
-            <div className="w-24 flex-shrink-0 flex flex-col items-center rounded-xl bg-gradient-to-b from-purple-500/5 to-transparent border border-purple-500/10">
+            <div className="w-24 flex-shrink-0 flex flex-col items-center rounded-xl bg-gradient-to-b from-teal-500/5 to-transparent border border-teal-500/10">
               <div className="pt-2 pb-1">
-                <span className="text-[9px] text-purple-400 font-bold tracking-wider">MASTER</span>
+                <span className="text-[9px] text-teal-400 font-bold tracking-wider">MASTER</span>
               </div>
-              <Knob value={80} onChange={() => {}} label="Vol" color="purple" />
+              <Knob value={80} onChange={() => {}} label="Vol" color="mint" />
               <div className="flex items-end gap-2 flex-1 pb-2">
                 <div className="flex flex-col-reverse gap-[1px]">
                   {Array.from({ length: 24 }, (_, i) => {
                     const pct = i / 24;
                     const on = pct < masterL;
-                    let color = 'bg-emerald-500';
+                    let color = 'bg-teal-500';
                     if (pct > 0.85) color = 'bg-red-500';
                     else if (pct > 0.7) color = 'bg-yellow-500';
                     return <div key={i} className={`w-2 h-1 rounded-[1px] transition-opacity duration-75 ${on ? color : 'bg-white/5'}`} />;
@@ -436,7 +440,7 @@ export default function StudioPage() {
                   {Array.from({ length: 24 }, (_, i) => {
                     const pct = i / 24;
                     const on = pct < masterR;
-                    let color = 'bg-emerald-500';
+                    let color = 'bg-teal-500';
                     if (pct > 0.85) color = 'bg-red-500';
                     else if (pct > 0.7) color = 'bg-yellow-500';
                     return <div key={i} className={`w-2 h-1 rounded-[1px] transition-opacity duration-75 ${on ? color : 'bg-white/5'}`} />;
@@ -458,7 +462,7 @@ export default function StudioPage() {
                 <div className="flex gap-3">
                   {/* EQ */}
                   <div className="flex-1 bg-white/[0.02] rounded-xl p-3 border border-white/5">
-                    <p className="text-[10px] text-purple-400 font-bold mb-3">PARAMETRIC EQ</p>
+                    <p className="text-[10px] text-teal-400 font-bold mb-3">PARAMETRIC EQ</p>
                     <div className="flex gap-4 items-end justify-center h-24">
                       {(['LOW', 'MID', 'HIGH'] as const).map((band, i) => (
                         <div key={band} className="flex flex-col items-center">
@@ -481,7 +485,7 @@ export default function StudioPage() {
                   </div>
                   {/* Reverb */}
                   <div className="flex-1 bg-white/[0.02] rounded-xl p-3 border border-white/5">
-                    <p className="text-[10px] text-emerald-400 font-bold mb-3">REVERB</p>
+                    <p className="text-[10px] text-teal-400 font-bold mb-3">REVERB</p>
                     <div className="flex gap-4 items-end justify-center h-24">
                       <Knob value={t.effects.reverb} onChange={(v) => upd(t.id, { effects: { ...t.effects, reverb: v } })} label="Size" color="green" />
                     </div>

@@ -8,10 +8,10 @@ import TrackCard from '@/components/TrackCard';
 import { Music, Upload, BarChart3, DollarSign, Wand2, Sliders, Mic, Library, Disc3, Zap } from 'lucide-react';
 
 const quickActions = [
-  { href: '/studio', label: 'Open Studio', desc: 'Mix, master & produce', icon: Sliders, color: 'from-purple-600 to-indigo-600' },
-  { href: '/playground', label: 'AI Generate', desc: 'Create music with AI', icon: Wand2, color: 'from-pink-600 to-rose-600' },
-  { href: '/recorder', label: 'Quick Record', desc: 'Capture an idea now', icon: Mic, color: 'from-green-600 to-emerald-600' },
-  { href: '/library', label: 'Sound Library', desc: 'Browse samples & loops', icon: Library, color: 'from-blue-600 to-cyan-600' },
+  { href: '/studio', label: 'Open Studio', desc: 'Mix, master & produce', icon: Sliders, color: 'from-teal-600 to-emerald-600' },
+  { href: '/playground', label: 'AI Generate', desc: 'Create music with AI', icon: Wand2, color: 'from-cyan-600 to-teal-600' },
+  { href: '/recorder', label: 'Quick Record', desc: 'Capture an idea now', icon: Mic, color: 'from-emerald-600 to-green-600' },
+  { href: '/library', label: 'Sound Library', desc: 'Browse samples & loops', icon: Library, color: 'from-violet-600 to-purple-600' },
 ];
 
 export default function HomePage() {
@@ -48,7 +48,7 @@ export default function HomePage() {
       {/* Hero */}
       <div className="mb-8">
         <h1 className="text-3xl font-bold mb-2">
-          Welcome to <span className="bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">SoundMint</span>
+          Welcome to <span className="bg-gradient-to-r from-teal-400 to-emerald-300 bg-clip-text text-transparent">SoundMint</span>
         </h1>
         <p className="text-gray-400">Your all-in-one music production studio. Create, produce, distribute.</p>
       </div>
