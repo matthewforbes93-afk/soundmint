@@ -325,11 +325,17 @@ export default function SessionPage() {
                 className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder:text-gray-700 focus:outline-none focus:border-teal-500/50 text-sm leading-relaxed" />
             )}
 
-            <button onClick={() => {
+            <button onClick={async () => {
               if (!artistName.trim() || !songTitle.trim()) return toast.error('Enter name and title');
               if (door === 'build') { window.location.href = '/studio'; return; }
+              // Request mic permission NOW before entering booth
+              try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                stream.getTracks().forEach(t => t.stop()); // Release immediately, just getting permission
+              } catch { toast.error('Mic access needed to record'); return; }
               setPhase('booth');
-              setTimeout(startBeat, 100);
+              // Beat auto-plays when booth opens
+              setTimeout(startBeat, 200);
             }}
               disabled={!artistName.trim() || !songTitle.trim()}
               className="w-full bg-teal-600 hover:bg-teal-700 disabled:opacity-30 text-white font-medium py-4 rounded-xl flex items-center justify-center gap-2 text-lg transition-all">
@@ -452,47 +458,83 @@ export default function SessionPage() {
 
       {/* ═══ MIX ═══ */}
       {phase === 'mix' && (
-        <div className="relative z-10 w-full max-w-md px-6 text-center">
+        <div className="relative z-10 w-full max-w-lg px-6 text-center">
           {vocalUrl && <audio ref={vocalAudioRef} src={vocalUrl} />}
 
-          <h2 className="text-2xl font-bold mb-1">{songTitle}</h2>
-          <p className="text-sm text-gray-600 mb-8">{artistName}</p>
-
-          {/* Volumes */}
-          <div className="space-y-4 mb-8">
-            <div className="flex items-center gap-4">
-              <span className="text-xs text-gray-500 w-14 text-right">Beat</span>
-              <input type="range" min={0} max={100} value={beatVolume}
-                onChange={e => { setBeatVolume(parseInt(e.target.value)); beatPlayerRef.current?.setVolume(parseInt(e.target.value) / 100); }}
-                className="flex-1 accent-teal-500" />
-              <span className="text-xs text-gray-600 w-8">{beatVolume}</span>
-            </div>
-            <div className="flex items-center gap-4">
-              <span className="text-xs text-gray-500 w-14 text-right">Vocals</span>
-              <input type="range" min={0} max={100} value={vocalVolume}
-                onChange={e => setVocalVolume(parseInt(e.target.value))}
-                className="flex-1 accent-teal-500" />
-              <span className="text-xs text-gray-600 w-8">{vocalVolume}</span>
-            </div>
+          <h2 className="text-3xl font-bold mb-1 tracking-tight">{songTitle}</h2>
+          <p className="text-sm text-gray-600 mb-2">{artistName}</p>
+          <div className="flex gap-2 justify-center mb-8">
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-gray-500">{genre}</span>
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-gray-500">{bpm} BPM</span>
           </div>
 
-          {/* Playback */}
-          <div className="flex gap-3 mb-6">
-            <button onClick={isPlaying ? stopAll : playMix}
-              className="flex-1 py-3 bg-white/5 hover:bg-white/10 rounded-xl text-sm flex items-center justify-center gap-2">
-              {isPlaying ? <><Pause className="w-4 h-4" /> Stop</> : <><Play className="w-4 h-4" /> Preview</>}
-            </button>
-            <button onClick={() => { stopAll(); setPhase('booth'); }}
-              className="py-3 px-4 bg-white/5 hover:bg-white/10 rounded-xl text-sm text-gray-500">
-              Re-record
-            </button>
-          </div>
-
-          {/* Export */}
-          <button onClick={exportSong} disabled={exporting}
-            className="w-full bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white font-medium py-4 rounded-xl flex items-center justify-center gap-2 text-lg">
-            {exporting ? <><Loader2 className="w-5 h-5 animate-spin" /> Mastering...</> : <><Download className="w-5 h-5" /> Export Song</>}
+          {/* Big play button */}
+          <button onClick={isPlaying ? stopAll : playMix}
+            className={`w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-8 transition-all hover:scale-105 ${
+              isPlaying
+                ? 'bg-white/10 hover:bg-white/20 shadow-lg shadow-teal-500/10'
+                : 'bg-teal-600 hover:bg-teal-700 shadow-lg shadow-teal-600/20'
+            }`}>
+            {isPlaying ? <Pause className="w-10 h-10 text-white" /> : <Play className="w-10 h-10 text-white ml-1" />}
           </button>
+
+          {isPlaying && (
+            <p className="text-xs text-teal-400/60 mb-6 animate-pulse">Playing your mix...</p>
+          )}
+
+          {/* Volume controls — larger, more touch-friendly */}
+          <div className="space-y-5 mb-8 bg-white/[0.02] rounded-2xl border border-white/5 p-6">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm text-gray-400">Beat</span>
+                <span className="text-sm text-gray-600">{beatVolume}%</span>
+              </div>
+              <input type="range" min={0} max={100} value={beatVolume}
+                onChange={e => { const v = parseInt(e.target.value); setBeatVolume(v); beatPlayerRef.current?.setVolume(v / 100); }}
+                className="w-full accent-teal-500 h-2" />
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm text-gray-400">Vocals</span>
+                <span className="text-sm text-gray-600">{vocalVolume}%</span>
+              </div>
+              <input type="range" min={0} max={100} value={vocalVolume}
+                onChange={e => { const v = parseInt(e.target.value); setVocalVolume(v); if (vocalAudioRef.current) vocalAudioRef.current.volume = v / 100; }}
+                className="w-full accent-teal-500 h-2" />
+            </div>
+
+            {/* Vocal preset in mix */}
+            <div>
+              <p className="text-xs text-gray-500 mb-2">Vocal Sound</p>
+              <div className="flex gap-1.5 justify-center flex-wrap">
+                {Object.entries(VOCAL_PRESETS).map(([key, p]) => (
+                  <button key={key} onClick={() => setVocalPreset(key)}
+                    className={`text-xs px-3 py-1.5 rounded-full transition-all ${
+                      vocalPreset === key ? 'bg-teal-500/20 text-teal-400 border border-teal-500/30' : 'bg-white/5 text-gray-600 border border-transparent'
+                    }`}>{p.label}</button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Action buttons — clear hierarchy */}
+          <div className="space-y-3">
+            <button onClick={exportSong} disabled={exporting}
+              className="w-full bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white font-semibold py-4 rounded-xl flex items-center justify-center gap-2 text-lg transition-all">
+              {exporting ? <><Loader2 className="w-5 h-5 animate-spin" /> Mastering...</> : <><Download className="w-5 h-5" /> Export Song</>}
+            </button>
+
+            <div className="flex gap-3">
+              <button onClick={() => { stopAll(); setPhase('booth'); }}
+                className="flex-1 py-3 bg-white/5 hover:bg-white/10 rounded-xl text-sm text-gray-400">
+                Re-record
+              </button>
+              <button onClick={reset}
+                className="flex-1 py-3 bg-white/5 hover:bg-white/10 rounded-xl text-sm text-gray-400">
+                Start Over
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
