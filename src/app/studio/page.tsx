@@ -10,6 +10,8 @@ import {
 import Synth from '@/components/Synth';
 import DrumMachine from '@/components/DrumMachine';
 import PianoRoll from '@/components/PianoRoll';
+import { useMetronome } from '@/lib/useMetronome';
+import { useKeyboardShortcuts } from '@/lib/useKeyboardShortcuts';
 
 // ─── Types ───
 interface TrackLane {
@@ -171,8 +173,73 @@ export default function StudioPage() {
   const [meters, setMeters] = useState<Record<string, [number, number]>>({});
   const animRef = useRef(0);
   const startRef = useRef(0);
+  const [metronomeOn, setMetronomeOn] = useState(false);
+  const [recordingTrackId, setRecordingTrackId] = useState<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const audioSourcesRef = useRef<Record<string, { source: AudioBufferSourceNode | null; gain: GainNode; pan: StereoPannerNode }>>({});
+  const metronome = useMetronome();
+
+  // Keyboard shortcuts
+  useKeyboardShortcuts({
+    ' ': () => { setPlaying(p => !p); setRecording(false); },
+    'r': () => { setRecording(r => !r); if (!recording) setPlaying(true); },
+    'm': () => setMetronomeOn(m => !m),
+    'cmd+z': () => { /* undo */ },
+    'cmd+shift+z': () => { /* redo */ },
+  });
+
+  // Metronome
+  useEffect(() => {
+    if (playing && metronomeOn) {
+      metronome.start(bpm);
+    } else {
+      metronome.stop();
+    }
+    return () => metronome.stop();
+  }, [playing, metronomeOn, bpm, metronome]);
+
+  // In-studio recording
+  async function startStudioRecording() {
+    const armedTrack = tracks.find(t => t.armed);
+    if (!armedTrack) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+      chunksRef.current = [];
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        // Upload to Supabase
+        const file = new File([blob], `studio-rec-${Date.now()}.webm`, { type: 'audio/webm' });
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('title', armedTrack.name);
+        try {
+          const res = await fetch('/api/upload', { method: 'POST', body: formData });
+          const data = await res.json();
+          if (res.ok && data.audio_url) {
+            setTracks(prev => prev.map(t =>
+              t.id === armedTrack.id ? { ...t, audioUrl: data.audio_url, waveform: wave(), armed: false } : t
+            ));
+          }
+        } catch { /* ignore */ }
+      };
+      recorder.start();
+      setRecordingTrackId(armedTrack.id);
+      setRecording(true);
+      setPlaying(true);
+    } catch { /* mic denied */ }
+  }
+
+  function stopStudioRecording() {
+    mediaRecorderRef.current?.stop();
+    setRecordingTrackId(null);
+    setRecording(false);
+  }
 
   // Initialize tracks on client only (avoids hydration mismatch from random waveforms)
   useEffect(() => {
@@ -304,13 +371,18 @@ export default function StudioPage() {
             {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
           </button>
           <button onClick={() => { setPlaying(false); setRecording(false); setPos(0); }} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5"><Square className="w-3 h-3" /></button>
-          <button onClick={() => { setRecording(!recording); if (!recording) setPlaying(true); }}
-            className={`w-9 h-9 flex items-center justify-center rounded-lg transition-all ${recording ? 'bg-red-600 text-white shadow-lg shadow-red-600/20 animate-pulse' : 'bg-white/5 text-red-400/60 hover:text-red-400 hover:bg-white/10'}`}>
+          <button onClick={() => { if (recording) stopStudioRecording(); else startStudioRecording(); }}
+            className={`w-9 h-9 flex items-center justify-center rounded-lg transition-all ${recording ? 'bg-red-600 text-white shadow-lg shadow-red-600/20 animate-pulse' : 'bg-white/5 text-red-400/60 hover:text-red-400 hover:bg-white/10'}`}
+            title="Record (R) — arm a track first">
             <CircleDot className="w-4 h-4" />
           </button>
           <button onClick={() => setLooping(!looping)}
-            className={`w-7 h-7 flex items-center justify-center rounded-md ${looping ? 'text-purple-400 bg-purple-500/10' : 'text-gray-600 hover:text-gray-300'}`}>
+            className={`w-7 h-7 flex items-center justify-center rounded-md ${looping ? 'text-teal-400 bg-teal-500/10' : 'text-gray-600 hover:text-gray-300'}`}>
             <Repeat className="w-3.5 h-3.5" />
+          </button>
+          <button onClick={() => setMetronomeOn(!metronomeOn)} title="Metronome (M)"
+            className={`w-7 h-7 flex items-center justify-center rounded-md text-[9px] font-bold ${metronomeOn ? 'text-teal-400 bg-teal-500/10' : 'text-gray-600 hover:text-gray-300'}`}>
+            CLK
           </button>
         </div>
 
