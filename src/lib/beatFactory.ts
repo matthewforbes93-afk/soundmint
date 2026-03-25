@@ -111,67 +111,145 @@ export class BeatPlayer {
   }
 
   private playKick() {
-    const vel = 0.6 + Math.random() * 0.3; // Velocity variation
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
-    osc.connect(gain); gain.connect(this.masterGain);
-    osc.frequency.setValueAtTime(140 + Math.random() * 20, this.ctx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.5);
-    gain.gain.setValueAtTime(vel, this.ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.5);
-    osc.start(); osc.stop(this.ctx.currentTime + 0.5);
+    const t = this.ctx.currentTime;
+    const vel = 0.7 + Math.random() * 0.3;
+
+    // Sub layer — deep sine for weight
+    const sub = this.ctx.createOscillator();
+    const subGain = this.ctx.createGain();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(60, t);
+    sub.frequency.exponentialRampToValueAtTime(30, t + 0.4);
+    sub.connect(subGain); subGain.connect(this.masterGain);
+    subGain.gain.setValueAtTime(vel * 0.9, t);
+    subGain.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+    sub.start(t); sub.stop(t + 0.6);
+
+    // Click layer — attack transient
+    const click = this.ctx.createOscillator();
+    const clickGain = this.ctx.createGain();
+    click.type = 'square';
+    click.frequency.setValueAtTime(160, t);
+    click.frequency.exponentialRampToValueAtTime(40, t + 0.03);
+    click.connect(clickGain); clickGain.connect(this.masterGain);
+    clickGain.gain.setValueAtTime(vel * 0.6, t);
+    clickGain.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+    click.start(t); click.stop(t + 0.05);
+
+    // Body — pitch sweep
+    const body = this.ctx.createOscillator();
+    const bodyGain = this.ctx.createGain();
+    body.type = 'sine';
+    body.frequency.setValueAtTime(150, t);
+    body.frequency.exponentialRampToValueAtTime(0.01, t + 0.3);
+    body.connect(bodyGain); bodyGain.connect(this.masterGain);
+    bodyGain.gain.setValueAtTime(vel * 0.8, t);
+    bodyGain.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+    body.start(t); body.stop(t + 0.4);
   }
 
   private playSnare() {
-    const bufSize = this.ctx.sampleRate * 0.15;
-    const buf = this.ctx.createBuffer(1, bufSize, this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < bufSize; i++) d[i] = Math.random() * 2 - 1;
-    const n = this.ctx.createBufferSource(); n.buffer = buf;
-    const g = this.ctx.createGain();
-    const f = this.ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 1500;
-    n.connect(f); f.connect(g); g.connect(this.masterGain);
-    g.gain.setValueAtTime(0.5, this.ctx.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.15);
-    n.start();
-    // Tone body
-    const osc = this.ctx.createOscillator();
-    const og = this.ctx.createGain();
-    osc.connect(og); og.connect(this.masterGain);
-    osc.frequency.value = 200;
-    og.gain.setValueAtTime(0.4, this.ctx.currentTime);
-    og.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.08);
-    osc.start(); osc.stop(this.ctx.currentTime + 0.08);
+    const t = this.ctx.currentTime;
+    const vel = 0.5 + Math.random() * 0.2;
+
+    // Noise layer — wide, crispy
+    const noiseLen = this.ctx.sampleRate * 0.2;
+    const noiseBuf = this.ctx.createBuffer(1, noiseLen, this.ctx.sampleRate);
+    const noiseData = noiseBuf.getChannelData(0);
+    for (let i = 0; i < noiseLen; i++) noiseData[i] = (Math.random() * 2 - 1) * (1 - i / noiseLen * 0.5);
+    const noise = this.ctx.createBufferSource(); noise.buffer = noiseBuf;
+    const noiseGain = this.ctx.createGain();
+    const noiseBP = this.ctx.createBiquadFilter(); noiseBP.type = 'bandpass'; noiseBP.frequency.value = 3000; noiseBP.Q.value = 0.8;
+    const noiseHP = this.ctx.createBiquadFilter(); noiseHP.type = 'highpass'; noiseHP.frequency.value = 1000;
+    noise.connect(noiseHP); noiseHP.connect(noiseBP); noiseBP.connect(noiseGain); noiseGain.connect(this.masterGain);
+    noiseGain.gain.setValueAtTime(vel * 0.7, t);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+    noise.start(t);
+
+    // Body tone — snare ring
+    const tone = this.ctx.createOscillator();
+    const toneGain = this.ctx.createGain();
+    tone.type = 'triangle';
+    tone.frequency.setValueAtTime(220, t);
+    tone.frequency.exponentialRampToValueAtTime(120, t + 0.05);
+    tone.connect(toneGain); toneGain.connect(this.masterGain);
+    toneGain.gain.setValueAtTime(vel * 0.5, t);
+    toneGain.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+    tone.start(t); tone.stop(t + 0.1);
+
+    // Snap — high transient
+    const snap = this.ctx.createOscillator();
+    const snapGain = this.ctx.createGain();
+    snap.type = 'sine';
+    snap.frequency.value = 400;
+    snap.connect(snapGain); snapGain.connect(this.masterGain);
+    snapGain.gain.setValueAtTime(vel * 0.3, t);
+    snapGain.gain.exponentialRampToValueAtTime(0.001, t + 0.02);
+    snap.start(t); snap.stop(t + 0.02);
   }
 
-  private playHihat() {
-    const bufSize = this.ctx.sampleRate * 0.04;
-    const buf = this.ctx.createBuffer(1, bufSize, this.ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < bufSize; i++) d[i] = Math.random() * 2 - 1;
-    const n = this.ctx.createBufferSource(); n.buffer = buf;
-    const g = this.ctx.createGain();
-    const f = this.ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 8000;
-    n.connect(f); f.connect(g); g.connect(this.masterGain);
-    g.gain.setValueAtTime(0.2, this.ctx.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.04);
-    n.start();
+  private playHihat(open = false) {
+    const t = this.ctx.currentTime;
+    const vel = 0.15 + Math.random() * 0.1;
+    const duration = open ? 0.15 : 0.04 + Math.random() * 0.02;
+
+    // Multi-band noise for metallic sound
+    const len = this.ctx.sampleRate * duration;
+    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
+    const src = this.ctx.createBufferSource(); src.buffer = buf;
+    const gain = this.ctx.createGain();
+    const hp = this.ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 7000;
+    const bp = this.ctx.createBiquadFilter(); bp.type = 'peaking'; bp.frequency.value = 10000; bp.Q.value = 2; bp.gain.value = 6;
+    src.connect(hp); hp.connect(bp); bp.connect(gain); gain.connect(this.masterGain);
+    gain.gain.setValueAtTime(vel, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
+    src.start(t);
+
+    // Add slight ring for metallic character
+    const ring = this.ctx.createOscillator();
+    const ringGain = this.ctx.createGain();
+    ring.type = 'square';
+    ring.frequency.value = 12000 + Math.random() * 2000;
+    ring.connect(ringGain); ringGain.connect(this.masterGain);
+    ringGain.gain.setValueAtTime(vel * 0.1, t);
+    ringGain.gain.exponentialRampToValueAtTime(0.001, t + duration * 0.5);
+    ring.start(t); ring.stop(t + duration);
   }
 
   private playClap() {
-    for (let i = 0; i < 3; i++) {
-      const bufSize = this.ctx.sampleRate * 0.015;
-      const buf = this.ctx.createBuffer(1, bufSize, this.ctx.sampleRate);
-      const d = buf.getChannelData(0);
-      for (let j = 0; j < bufSize; j++) d[j] = Math.random() * 2 - 1;
-      const n = this.ctx.createBufferSource(); n.buffer = buf;
-      const g = this.ctx.createGain();
-      const f = this.ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 2500;
-      n.connect(f); f.connect(g); g.connect(this.masterGain);
-      g.gain.setValueAtTime(0.3, this.ctx.currentTime + i * 0.008);
-      g.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + i * 0.008 + 0.08);
-      n.start(this.ctx.currentTime + i * 0.008);
+    const t = this.ctx.currentTime;
+    const vel = 0.4 + Math.random() * 0.15;
+
+    // Multiple noise bursts for realistic clap
+    for (let i = 0; i < 4; i++) {
+      const offset = i * 0.007 + Math.random() * 0.003;
+      const len = this.ctx.sampleRate * 0.025;
+      const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let j = 0; j < len; j++) data[j] = (Math.random() * 2 - 1) * (1 - j / len);
+      const src = this.ctx.createBufferSource(); src.buffer = buf;
+      const gain = this.ctx.createGain();
+      const bp = this.ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 2000 + Math.random() * 500; bp.Q.value = 1.5;
+      src.connect(bp); bp.connect(gain); gain.connect(this.masterGain);
+      gain.gain.setValueAtTime(vel * (0.6 + i * 0.1), t + offset);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + offset + 0.12);
+      src.start(t + offset);
     }
+
+    // Reverb tail
+    const tailLen = this.ctx.sampleRate * 0.15;
+    const tailBuf = this.ctx.createBuffer(1, tailLen, this.ctx.sampleRate);
+    const tailData = tailBuf.getChannelData(0);
+    for (let i = 0; i < tailLen; i++) tailData[i] = (Math.random() * 2 - 1) * Math.exp(-i / (tailLen * 0.3));
+    const tail = this.ctx.createBufferSource(); tail.buffer = tailBuf;
+    const tailGain = this.ctx.createGain();
+    const tailBP = this.ctx.createBiquadFilter(); tailBP.type = 'bandpass'; tailBP.frequency.value = 1500; tailBP.Q.value = 0.5;
+    tail.connect(tailBP); tailBP.connect(tailGain); tailGain.connect(this.masterGain);
+    tailGain.gain.setValueAtTime(vel * 0.25, t + 0.03);
+    tailGain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+    tail.start(t + 0.03);
   }
 
   private playChord(chordIdx: number) {
@@ -181,32 +259,63 @@ export class BeatPlayer {
 
     chord.forEach(semitone => {
       const freq = rootFreq * Math.pow(2, semitone / 12);
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-      osc.type = 'triangle';
-      osc.frequency.value = freq;
-      osc.connect(gain); gain.connect(this.masterGain);
-      gain.gain.setValueAtTime(0.08, this.ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 1.5);
-      osc.start(); osc.stop(this.ctx.currentTime + 1.5);
+
+      // Layer 1: warm pad (sawtooth filtered)
+      const saw = this.ctx.createOscillator();
+      const sawGain = this.ctx.createGain();
+      const sawFilter = this.ctx.createBiquadFilter();
+      saw.type = 'sawtooth';
+      saw.frequency.value = freq;
+      sawFilter.type = 'lowpass'; sawFilter.frequency.value = 1500; sawFilter.Q.value = 0.5;
+      saw.connect(sawFilter); sawFilter.connect(sawGain); sawGain.connect(this.masterGain);
+      sawGain.gain.setValueAtTime(0.06, this.ctx.currentTime);
+      sawGain.gain.setValueAtTime(0.05, this.ctx.currentTime + 0.1);
+      sawGain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 2.5);
+      saw.start(); saw.stop(this.ctx.currentTime + 2.5);
+
+      // Layer 2: soft sine for warmth
+      const sine = this.ctx.createOscillator();
+      const sineGain = this.ctx.createGain();
+      sine.type = 'sine';
+      sine.frequency.value = freq;
+      sine.connect(sineGain); sineGain.connect(this.masterGain);
+      sineGain.gain.setValueAtTime(0.04, this.ctx.currentTime);
+      sineGain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 2.0);
+      sine.start(); sine.stop(this.ctx.currentTime + 2.0);
     });
   }
 
   private playBass(chordIdx: number) {
+    const t = this.ctx.currentTime;
     const progression = CHORD_PROGRESSIONS[this.config.mood] || CHORD_PROGRESSIONS['chill'];
     const chord = progression[chordIdx % progression.length];
-    const rootFreq = (KEY_FREQ[this.config.key] || KEY_FREQ['C']) / 2; // One octave down
+    const rootFreq = (KEY_FREQ[this.config.key] || KEY_FREQ['C']) / 2;
     const freq = rootFreq * Math.pow(2, chord[0] / 12);
 
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(freq + 30, this.ctx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(freq, this.ctx.currentTime + 0.05);
-    osc.connect(gain); gain.connect(this.masterGain);
-    gain.gain.setValueAtTime(0.4, this.ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.8);
-    osc.start(); osc.stop(this.ctx.currentTime + 0.8);
+    // Sub bass — pure sine, long sustain
+    const sub = this.ctx.createOscillator();
+    const subGain = this.ctx.createGain();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(freq + 40, t);
+    sub.frequency.exponentialRampToValueAtTime(freq, t + 0.06);
+    sub.connect(subGain); subGain.connect(this.masterGain);
+    subGain.gain.setValueAtTime(0.5, t);
+    subGain.gain.setValueAtTime(0.4, t + 0.1);
+    subGain.gain.exponentialRampToValueAtTime(0.001, t + 1.2);
+    sub.start(t); sub.stop(t + 1.2);
+
+    // Harmonics — slight saturation
+    const harm = this.ctx.createOscillator();
+    const harmGain = this.ctx.createGain();
+    const harmFilter = this.ctx.createBiquadFilter();
+    harm.type = 'sawtooth';
+    harm.frequency.setValueAtTime(freq * 2 + 40, t);
+    harm.frequency.exponentialRampToValueAtTime(freq * 2, t + 0.06);
+    harmFilter.type = 'lowpass'; harmFilter.frequency.value = 400;
+    harm.connect(harmFilter); harmFilter.connect(harmGain); harmGain.connect(this.masterGain);
+    harmGain.gain.setValueAtTime(0.12, t);
+    harmGain.gain.exponentialRampToValueAtTime(0.001, t + 0.8);
+    harm.start(t); harm.stop(t + 0.8);
   }
 
   start() {
@@ -221,11 +330,16 @@ export class BeatPlayer {
     const tick = () => {
       const s = this.step % 16;
 
-      // Drums
-      if (pattern.kick[s]) this.playKick();
-      if (pattern.snare[s]) this.playSnare();
-      if (pattern.hihat[s]) this.playHihat();
-      if (pattern.clap[s]) this.playClap();
+      // Swing: delay odd-numbered steps slightly
+      const swingMs = (s % 2 === 1) ? msPerStep * 0.08 : 0;
+
+      // Drums with swing
+      setTimeout(() => {
+        if (pattern.kick[s]) this.playKick();
+        if (pattern.snare[s]) this.playSnare();
+        if (pattern.hihat[s]) this.playHihat(s % 8 === 6); // Open hihat on off-beats
+        if (pattern.clap[s]) this.playClap();
+      }, swingMs);
 
       // Chords every 4 beats (every bar)
       if (s === 0) {
