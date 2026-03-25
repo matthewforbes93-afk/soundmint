@@ -4,7 +4,8 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, Sliders, Wand2, Library,
-  Upload, FolderOpen, Settings, Music2, Mic, Radio
+  Upload, FolderOpen, Settings, Music2, Mic, Radio,
+  Users, ShoppingBag
 } from 'lucide-react';
 
 const navItems = [
@@ -15,6 +16,8 @@ const navItems = [
   { href: '/library', label: 'Sound Library', icon: Library },
   { href: '/projects', label: 'Projects', icon: FolderOpen },
   { href: '/distribute', label: 'Distribute', icon: Upload },
+  { href: '/collaborate', label: 'Collaborate', icon: Users },
+  { href: '/marketplace', label: 'Marketplace', icon: ShoppingBag },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 

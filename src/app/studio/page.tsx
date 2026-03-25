@@ -10,6 +10,8 @@ import {
 import Synth from '@/components/Synth';
 import DrumMachine from '@/components/DrumMachine';
 import PianoRoll from '@/components/PianoRoll';
+import ArrangementMarkers from '@/components/ArrangementMarkers';
+import ExportDialog from '@/components/ExportDialog';
 import { useMetronome } from '@/lib/useMetronome';
 import { useKeyboardShortcuts } from '@/lib/useKeyboardShortcuts';
 
@@ -174,6 +176,8 @@ export default function StudioPage() {
   const animRef = useRef(0);
   const startRef = useRef(0);
   const [metronomeOn, setMetronomeOn] = useState(false);
+  const [showExport, setShowExport] = useState(false);
+  const [sections, setSections] = useState<{ id: string; name: string; startBar: number; color: string }[]>([]);
   const [recordingTrackId, setRecordingTrackId] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -542,13 +546,15 @@ export default function StudioPage() {
           <button onClick={() => { /* undo */ }} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5" title="Undo"><Undo2 className="w-3.5 h-3.5" /></button>
           <button onClick={() => { /* redo */ }} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5" title="Redo"><Redo2 className="w-3.5 h-3.5" /></button>
           <button className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5" title="Save"><Save className="w-3.5 h-3.5" /></button>
-          <button className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5" title="Export"><Download className="w-3.5 h-3.5" /></button>
+          <button onClick={() => setShowExport(true)} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5" title="Export Song"><Download className="w-3.5 h-3.5" /></button>
         </div>
       </div>
 
       {/* ═══ TIMELINE + TRACKS ═══ */}
       <div className="flex-1 flex overflow-hidden">
         <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Arrangement sections */}
+          <ArrangementMarkers sections={sections} totalBars={totalBars} pxPerBar={pxPerBar} onChange={setSections} />
           {/* Ruler */}
           <div className="h-6 border-b border-white/5 flex flex-shrink-0 bg-white/[0.01]">
             <div className="w-52 flex-shrink-0 border-r border-white/5" />
@@ -828,6 +834,15 @@ export default function StudioPage() {
           </div>
         )}
       </div>
+
+      {/* Export Dialog */}
+      {showExport && (
+        <ExportDialog
+          tracks={tracks.map(t => ({ name: t.name, url: t.audioUrl, volume: t.volume - 80, pan: t.pan, mute: t.mute }))}
+          title="My Song"
+          onClose={() => setShowExport(false)}
+        />
+      )}
     </div>
   );
 }
