@@ -223,25 +223,42 @@ export default function SessionPage() {
         stream.getTracks().forEach(t => t.stop());
         setVizData(new Array(64).fill(0));
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-        if (blob.size < 500) return;
+        if (blob.size < 500) { toast.error('Recording too short'); return; }
 
-        // Convert to WAV
+        toast.success('Processing recording...');
+
+        // Try WAV conversion, fall back to raw WebM upload
+        let file: File;
         try {
+          const convCtx = new AudioContext();
           const arrBuf = await blob.arrayBuffer();
-          const audioBuf = await ctx.decodeAudioData(arrBuf);
+          const audioBuf = await convCtx.decodeAudioData(arrBuf);
           const wavBuf = encodeWav(audioBuf);
-          const file = new File([wavBuf], `vocal-${Date.now()}.wav`, { type: 'audio/wav' });
+          file = new File([wavBuf], `vocal-${Date.now()}.wav`, { type: 'audio/wav' });
+          convCtx.close();
+        } catch (e) {
+          console.error('WAV conversion failed, uploading WebM:', e);
+          file = new File([blob], `vocal-${Date.now()}.webm`, { type: 'audio/webm' });
+        }
+
+        try {
           const formData = new FormData();
           formData.append('file', file);
           formData.append('title', `${songTitle} - Vocals`);
           const res = await fetch('/api/upload', { method: 'POST', body: formData });
           const data = await res.json();
-          if (res.ok) {
+          if (res.ok && data.audio_url) {
             setVocalUrl(data.audio_url);
-            toast.success('Recording saved');
+            toast.success('Recording ready — hit Play to listen');
             setPhase('mix');
+          } else {
+            console.error('Upload failed:', data);
+            toast.error('Upload failed — try again');
           }
-        } catch { toast.error('Save failed'); }
+        } catch (e) {
+          console.error('Upload error:', e);
+          toast.error('Upload failed');
+        }
       };
 
       // Start beat + recording
@@ -376,6 +393,10 @@ export default function SessionPage() {
           </div>
         </div>
       )}
+
+      {/* Global audio elements — always mounted */}
+      {vocalUrl && <audio ref={vocalAudioRef} src={vocalUrl} crossOrigin="anonymous" />}
+      {beatUrl && <audio id="aiBeatAudio" src={beatUrl} loop crossOrigin="anonymous" />}
 
       {/* ═══ MAIN CONTENT — fills remaining space ═══ */}
       <div className="flex-1 flex items-center justify-center overflow-auto">
@@ -602,8 +623,7 @@ export default function SessionPage() {
       {/* ═══ THE BOOTH ═══ */}
       {phase === 'booth' && (
         <div className="relative z-10 w-full max-w-lg px-6 text-center">
-          {/* AI beat audio element */}
-          {beatUrl && <audio id="aiBeatAudio" src={beatUrl} loop />}
+          {/* AI beat audio element is mounted globally above */}
 
           {/* Song info */}
           <div className="mb-6">
@@ -716,7 +736,7 @@ export default function SessionPage() {
       {/* ═══ MIX ═══ */}
       {phase === 'mix' && (
         <div className="relative z-10 w-full max-w-lg px-6 text-center">
-          {vocalUrl && <audio ref={vocalAudioRef} src={vocalUrl} />}
+          {/* vocal audio is mounted globally */}
 
           <h2 className="text-3xl font-bold mb-1 tracking-tight">{songTitle}</h2>
           <p className="text-sm text-gray-600 mb-2">{artistName}</p>
