@@ -153,13 +153,8 @@ function ChannelStrip({ track, meters, onUpdate, selected, onSelect }: {
 
 // ═══ MAIN STUDIO PAGE ═══
 export default function StudioPage() {
-  const [tracks, setTracks] = useState<TrackLane[]>([
-    mkTrack('Drums', 0, 'audio', true),
-    mkTrack('Bass', 1, 'audio', true),
-    mkTrack('Keys', 2, 'midi', true),
-    mkTrack('Vocals', 3, 'audio', true),
-    mkTrack('Synth Pad', 4, 'ai', true),
-  ]);
+  const [tracks, setTracks] = useState<TrackLane[]>([]);
+  const [initialized, setInitialized] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [recording, setRecording] = useState(false);
   const [bpm, setBpm] = useState(120);
@@ -173,6 +168,33 @@ export default function StudioPage() {
   const [meters, setMeters] = useState<Record<string, [number, number]>>({});
   const animRef = useRef(0);
   const startRef = useRef(0);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const audioSourcesRef = useRef<Record<string, { source: AudioBufferSourceNode | null; gain: GainNode; pan: StereoPannerNode }>>({});
+
+  // Initialize tracks on client only (avoids hydration mismatch from random waveforms)
+  useEffect(() => {
+    if (!initialized) {
+      setTracks([
+        mkTrack('Drums', 0, 'audio', true),
+        mkTrack('Bass', 1, 'audio', true),
+        mkTrack('Keys', 2, 'midi', true),
+        mkTrack('Vocals', 3, 'audio', true),
+        mkTrack('Synth Pad', 4, 'ai', true),
+      ]);
+      setInitialized(true);
+    }
+  }, [initialized]);
+
+  // Update audio nodes when track settings change
+  useEffect(() => {
+    tracks.forEach(track => {
+      const nodes = audioSourcesRef.current[track.id];
+      if (nodes) {
+        nodes.gain.gain.value = track.mute ? 0 : track.volume / 100;
+        nodes.pan.pan.value = track.pan / 100;
+      }
+    });
+  }, [tracks]);
 
   // Animate playhead + meters
   useEffect(() => {
@@ -210,7 +232,9 @@ export default function StudioPage() {
   function addTrack(type: TrackLane['type']) {
     const n = tracks.length;
     const names: Record<string, string> = { audio: `Audio ${n+1}`, midi: `MIDI ${n+1}`, ai: `AI ${n+1}` };
-    setTracks(p => [...p, mkTrack(names[type], n, type, type === 'ai')]);
+    const track = mkTrack(names[type], n, type, type === 'ai');
+    track.id = `t-new-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setTracks(p => [...p, track]);
   }
 
   const bar = Math.floor(pos * bpm / 60 / 4) + 1;
@@ -235,7 +259,44 @@ export default function StudioPage() {
         {/* Transport buttons */}
         <div className="flex items-center gap-1">
           <button onClick={() => { setPlaying(false); setPos(0); }} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5"><SkipBack className="w-3.5 h-3.5" /></button>
-          <button onClick={() => { setPlaying(!playing); setRecording(false); }}
+          <button onClick={() => {
+            const next = !playing;
+            if (next) {
+              // Create AudioContext if needed
+              if (!audioCtxRef.current) {
+                audioCtxRef.current = new AudioContext();
+              }
+              const ctx = audioCtxRef.current;
+              if (ctx.state === 'suspended') ctx.resume();
+              // For each track with audioUrl, load and play
+              tracks.forEach(async (track) => {
+                if (track.audioUrl && !track.mute) {
+                  try {
+                    const resp = await fetch(track.audioUrl);
+                    const buf = await resp.arrayBuffer();
+                    const audioBuf = await ctx.decodeAudioData(buf);
+                    const source = ctx.createBufferSource();
+                    source.buffer = audioBuf;
+                    const gain = ctx.createGain();
+                    gain.gain.value = track.volume / 100;
+                    const pan = ctx.createStereoPanner();
+                    pan.pan.value = track.pan / 100;
+                    source.connect(gain).connect(pan).connect(ctx.destination);
+                    source.start(0, pos);
+                    audioSourcesRef.current[track.id] = { source, gain, pan };
+                  } catch { /* no audio file yet */ }
+                }
+              });
+            } else {
+              // Stop all sources
+              Object.values(audioSourcesRef.current).forEach(({ source }) => {
+                try { source?.stop(); } catch { /* already stopped */ }
+              });
+              audioSourcesRef.current = {};
+            }
+            setPlaying(next);
+            setRecording(false);
+          }}
             className={`w-9 h-9 flex items-center justify-center rounded-lg transition-all ${playing ? 'bg-gradient-to-b from-white to-gray-200 text-black shadow-lg shadow-white/10' : 'bg-white/10 text-white hover:bg-white/15'}`}>
             {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
           </button>
@@ -522,9 +583,21 @@ export default function StudioPage() {
                 'Brass Stab', 'Flute Melody', 'Bell Chime', 'Percussion', 'Shaker', 'Vinyl Noise',
               ].map(sample => (
                 <button key={sample}
-                  className="bg-white/[0.02] hover:bg-white/[0.05] border border-white/[0.03] hover:border-white/10 rounded-lg p-2 text-left transition-all group">
+                  onClick={() => {
+                    const ctx = new AudioContext();
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+                    gain.gain.value = 0.3;
+                    osc.frequency.value = 200 + Math.random() * 600;
+                    osc.start();
+                    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+                    osc.stop(ctx.currentTime + 0.3);
+                  }}
+                  className="bg-white/[0.02] hover:bg-white/[0.05] border border-white/[0.03] hover:border-white/10 rounded-lg p-2 text-left transition-all group cursor-pointer">
                   <div className="flex items-center gap-1.5">
-                    <Play className="w-2.5 h-2.5 text-gray-700 group-hover:text-purple-400 transition-colors" />
+                    <Play className="w-2.5 h-2.5 text-gray-700 group-hover:text-teal-400 transition-colors" />
                     <span className="text-[10px] text-gray-500 group-hover:text-white transition-colors">{sample}</span>
                   </div>
                 </button>

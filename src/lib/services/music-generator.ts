@@ -13,7 +13,7 @@ async function generateWithMusicGen(request: GenerationRequest): Promise<Generat
 
   // Try local MusicGen server first, then HuggingFace, then Replicate
   let audioBuffer: ArrayBuffer;
-  const localUrl = process.env.MUSICGEN_LOCAL_URL || 'http://localhost:8001';
+  const localUrl = process.env.MUSICGEN_LOCAL_URL || 'http://localhost:8501';
 
   try {
     audioBuffer = await generateViaLocal(prompt, localUrl);

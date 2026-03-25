@@ -5,7 +5,7 @@ import { useSoundMintStore } from '@/lib/store';
 import { Play, Pause, SkipBack, SkipForward, Volume2, Music } from 'lucide-react';
 
 export default function Player() {
-  const { currentTrack, isPlaying, setIsPlaying } = useSoundMintStore();
+  const { currentTrack, isPlaying, setIsPlaying, tracks, setCurrentTrack } = useSoundMintStore();
   const audioRef = useRef<HTMLAudioElement>(null);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -13,7 +13,7 @@ export default function Player() {
 
   useEffect(() => {
     if (!audioRef.current) return;
-    if (isPlaying) {
+    if (isPlaying && currentTrack?.audio_url) {
       audioRef.current.play().catch(() => setIsPlaying(false));
     } else {
       audioRef.current.pause();
@@ -41,6 +41,21 @@ export default function Player() {
     }
   }
 
+  function skipTrack(direction: 'prev' | 'next') {
+    if (!currentTrack || tracks.length === 0) return;
+    const playable = tracks.filter(t => t.audio_url);
+    if (playable.length === 0) return;
+    const idx = playable.findIndex(t => t.id === currentTrack.id);
+    let newIdx: number;
+    if (direction === 'next') {
+      newIdx = idx >= playable.length - 1 ? 0 : idx + 1;
+    } else {
+      newIdx = idx <= 0 ? playable.length - 1 : idx - 1;
+    }
+    setCurrentTrack(playable[newIdx]);
+    setIsPlaying(true);
+  }
+
   function formatTime(seconds: number) {
     const m = Math.floor(seconds / 60);
     const s = Math.floor(seconds % 60);
@@ -56,7 +71,7 @@ export default function Player() {
           ref={audioRef}
           src={currentTrack.audio_url}
           onTimeUpdate={handleTimeUpdate}
-          onEnded={() => setIsPlaying(false)}
+          onEnded={() => skipTrack('next')}
           onLoadedMetadata={handleTimeUpdate}
         />
       )}
@@ -80,11 +95,14 @@ export default function Player() {
 
         <div className="flex-1 flex flex-col items-center gap-1">
           <div className="flex items-center gap-4">
-            <button className="text-gray-400 hover:text-white">
+            <button onClick={() => skipTrack('prev')} className="text-gray-400 hover:text-white">
               <SkipBack className="w-4 h-4" />
             </button>
             <button
-              onClick={() => setIsPlaying(!isPlaying)}
+              onClick={() => {
+                if (!currentTrack.audio_url) return;
+                setIsPlaying(!isPlaying);
+              }}
               className="w-8 h-8 rounded-full bg-white flex items-center justify-center hover:scale-105 transition-transform"
             >
               {isPlaying ? (
@@ -93,7 +111,7 @@ export default function Player() {
                 <Play className="w-4 h-4 text-black ml-0.5" />
               )}
             </button>
-            <button className="text-gray-400 hover:text-white">
+            <button onClick={() => skipTrack('next')} className="text-gray-400 hover:text-white">
               <SkipForward className="w-4 h-4" />
             </button>
           </div>
@@ -105,7 +123,7 @@ export default function Player() {
               max={duration || 100}
               value={progress}
               onChange={handleSeek}
-              className="flex-1 h-1 accent-purple-500 bg-gray-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-purple-500 [&::-webkit-slider-thumb]:rounded-full"
+              className="flex-1 h-1 accent-teal-500 bg-gray-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:bg-teal-500 [&::-webkit-slider-thumb]:rounded-full"
             />
             <span className="text-xs text-gray-500 w-10">{formatTime(duration)}</span>
           </div>
@@ -120,7 +138,7 @@ export default function Player() {
             step={0.01}
             value={volume}
             onChange={(e) => setVolume(parseFloat(e.target.value))}
-            className="flex-1 h-1 accent-purple-500 bg-gray-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:bg-purple-500 [&::-webkit-slider-thumb]:rounded-full"
+            className="flex-1 h-1 accent-teal-500 bg-gray-700 rounded-full appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:bg-teal-500 [&::-webkit-slider-thumb]:rounded-full"
           />
         </div>
       </div>

@@ -68,25 +68,25 @@ export default function RecorderPage() {
     if (!audioBlob) return;
     setSaving(true);
     try {
+      // Convert webm to a proper file
+      const file = new File([audioBlob], `recording-${Date.now()}.webm`, { type: 'audio/webm' });
+
+      // Upload directly via our API
       const formData = new FormData();
-      formData.append('file', audioBlob, 'recording.webm');
+      formData.append('file', file);
       formData.append('title', title || 'Untitled Recording');
 
-      // Upload to Supabase via a simple fetch
-      const res = await fetch('/api/tracks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          genre: 'lo-fi',
-          mood: 'chill',
-          prompt: 'live recording',
-          artist_name: 'Me',
-          ai_provider: 'musicgen',
-        }),
-      });
-      if (res.ok) toast.success('Recording saved!');
-    } catch {
-      toast.error('Save failed');
+      const uploadRes = await fetch('/api/upload', { method: 'POST', body: formData });
+      const uploadData = await uploadRes.json();
+      if (!uploadRes.ok) throw new Error(uploadData.error || 'Upload failed');
+
+      toast.success('Recording saved to library!');
+      setTitle('');
+      setAudioUrl(null);
+      setAudioBlob(null);
+      setDuration(0);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Save failed');
     } finally {
       setSaving(false);
     }
