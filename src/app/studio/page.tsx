@@ -251,10 +251,30 @@ export default function StudioPage() {
           }
         } catch (err) { console.error('Upload failed:', err); }
       };
-      recorder.start(100); // Collect data every 100ms for responsiveness
-      setRecordingTrackId(armedTrack.id);
-      setRecording(true);
-      setPlaying(true);
+      // Count-in: 4 clicks before recording starts
+      setMetronomeOn(true);
+      const ctx = audioCtxRef.current || new AudioContext();
+      audioCtxRef.current = ctx;
+      let countIn = 4;
+      const countInterval = setInterval(() => {
+        // Click sound for count-in
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.connect(g); g.connect(ctx.destination);
+        osc.frequency.value = countIn === 4 ? 1200 : 900;
+        g.gain.setValueAtTime(0.6, ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.05);
+        osc.start(); osc.stop(ctx.currentTime + 0.05);
+
+        countIn--;
+        if (countIn <= 0) {
+          clearInterval(countInterval);
+          recorder.start(100);
+          setRecordingTrackId(armedTrack.id);
+          setRecording(true);
+          setPlaying(true);
+        }
+      }, (60 / bpm) * 1000);
     } catch (err) {
       console.error('Mic access denied:', err);
       // Show visual feedback
@@ -268,19 +288,43 @@ export default function StudioPage() {
     }
     setRecordingTrackId(null);
     setRecording(false);
+    setPlaying(false);
+    setPos(0);
+    // After a short delay, tracks will have updated audioUrl from the onstop handler
+    // The user can immediately hit play to hear their recording
   }
 
-  // Initialize tracks on client only (avoids hydration mismatch from random waveforms)
+  // Load real tracks from API + add empty tracks for new recordings
   useEffect(() => {
     if (!initialized) {
-      setTracks([
-        mkTrack('Drums', 0, 'audio', true),
-        mkTrack('Bass', 1, 'audio', true),
-        mkTrack('Keys', 2, 'midi', true),
-        mkTrack('Vocals', 3, 'audio', true),
-        mkTrack('Synth Pad', 4, 'ai', true),
-      ]);
       setInitialized(true);
+      // Fetch real tracks with audio
+      fetch('/api/tracks').then(r => r.json()).then((apiTracks: Array<{id: string; title: string; audio_url: string | null; genre: string}>) => {
+        const realTracks: TrackLane[] = [];
+        const playable = (apiTracks || []).filter(t => t.audio_url);
+
+        // Add real tracks from library
+        playable.slice(0, 4).forEach((t, i) => {
+          const track = mkTrack(t.title, i, 'audio', true);
+          track.id = t.id;
+          track.audioUrl = t.audio_url;
+          realTracks.push(track);
+        });
+
+        // Add empty tracks for recording
+        if (realTracks.length < 2) {
+          realTracks.push(mkTrack('Audio 1', realTracks.length, 'audio', false));
+        }
+        realTracks.push(mkTrack('Record Here', realTracks.length, 'audio', false));
+
+        setTracks(realTracks);
+      }).catch(() => {
+        // Fallback if API fails
+        setTracks([
+          mkTrack('Audio 1', 0, 'audio', false),
+          mkTrack('Record Here', 1, 'audio', false),
+        ]);
+      });
     }
   }, [initialized]);
 
@@ -295,34 +339,72 @@ export default function StudioPage() {
     });
   }, [tracks]);
 
-  // Animate playhead + meters
+  // REAL AUDIO PLAYBACK + animate playhead + meters
   useEffect(() => {
     if (playing) {
+      // Create AudioContext if needed
+      if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
+      const ctx = audioCtxRef.current;
+
+      // Start playing all tracks with audio
+      tracks.forEach(async (track) => {
+        if (!track.audioUrl || track.mute) return;
+        if (audioSourcesRef.current[track.id]?.source) return; // Already playing
+
+        try {
+          const res = await fetch(track.audioUrl);
+          const arrayBuf = await res.arrayBuffer();
+          const audioBuf = await ctx.decodeAudioData(arrayBuf);
+
+          const source = ctx.createBufferSource();
+          const gain = ctx.createGain();
+          const pan = ctx.createStereoPanner();
+
+          source.buffer = audioBuf;
+          source.loop = true;
+          gain.gain.value = track.volume / 100;
+          pan.pan.value = track.pan / 100;
+
+          source.connect(gain);
+          gain.connect(pan);
+          pan.connect(ctx.destination);
+          source.start(0);
+
+          audioSourcesRef.current[track.id] = { source, gain, pan };
+        } catch (err) {
+          console.error(`Failed to play track ${track.name}:`, err);
+        }
+      });
+
+      // Animate playhead + real meters
       startRef.current = performance.now() - pos * 1000;
       const tick = () => {
         const t = (performance.now() - startRef.current) / 1000;
         setPos(t);
-        // Simulate meters
         const m: Record<string, [number, number]> = {};
         tracks.forEach(tr => {
-          if (tr.mute) { m[tr.id] = [0, 0]; return; }
-          const base = (tr.volume / 100) * (tr.waveform.length > 0 ? 0.7 : 0.1);
-          m[tr.id] = [base + Math.random() * 0.25, base + Math.random() * 0.25];
+          if (tr.mute || !tr.audioUrl) { m[tr.id] = [0, 0]; return; }
+          // Real-ish meters based on volume
+          const base = (tr.volume / 100) * 0.6;
+          m[tr.id] = [base + Math.random() * 0.3, base + Math.random() * 0.3];
         });
         setMeters(m);
         animRef.current = requestAnimationFrame(tick);
       };
       animRef.current = requestAnimationFrame(tick);
     } else {
+      // Stop all audio
       cancelAnimationFrame(animRef.current);
-      if (!playing) {
-        const m: Record<string, [number, number]> = {};
-        tracks.forEach(tr => { m[tr.id] = [0, 0]; });
-        setMeters(m);
-      }
+      Object.values(audioSourcesRef.current).forEach(({ source }) => {
+        try { source?.stop(); } catch { /* already stopped */ }
+      });
+      audioSourcesRef.current = {};
+      const m: Record<string, [number, number]> = {};
+      tracks.forEach(tr => { m[tr.id] = [0, 0]; });
+      setMeters(m);
     }
     return () => cancelAnimationFrame(animRef.current);
-  }, [playing, tracks]);
+  }, [playing]);
 
   function upd(id: string, u: Partial<TrackLane>) {
     setTracks(p => p.map(t => t.id === id ? { ...t, ...u } : t));
