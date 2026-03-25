@@ -21,6 +21,15 @@ const VOCAL_PRESETS: Record<string, { label: string; eq: [number, number, number
   intimate:  { label: 'Intimate',  eq: [2, 1, -1],   reverb: 25,  comp: 30 },
 };
 
+const AUTOTUNE_PRESETS: Record<string, { label: string; desc: string; speed: number; detune: number; chorusDepth: number }> = {
+  off:       { label: 'Off',        desc: 'No pitch correction',              speed: 0,    detune: 0,   chorusDepth: 0 },
+  subtle:    { label: 'Subtle',     desc: 'Light correction, natural feel',   speed: 0.3,  detune: 5,   chorusDepth: 0.1 },
+  modern:    { label: 'Modern',     desc: 'Pop/R&B standard correction',      speed: 0.6,  detune: 10,  chorusDepth: 0.2 },
+  hard:      { label: 'Hard',       desc: 'T-Pain / Future style snap',       speed: 1.0,  detune: 15,  chorusDepth: 0.3 },
+  robot:     { label: 'Robot',      desc: 'Extreme effect, Daft Punk vibes',  speed: 1.0,  detune: 25,  chorusDepth: 0.5 },
+  harmony:   { label: 'Harmony',    desc: 'Adds a 3rd and 5th above',        speed: 0.5,  detune: 0,   chorusDepth: 0.4 },
+};
+
 const SPACE_PRESETS: Record<string, { label: string; reverb: number }> = {
   dry:       { label: 'Dry',       reverb: 0 },
   room:      { label: 'Room',      reverb: 20 },
@@ -96,6 +105,8 @@ export default function SessionPage() {
   const [exporting, setExporting] = useState(false);
   const [vizData, setVizData] = useState<number[]>(new Array(64).fill(0));
   const [lyrics, setLyrics] = useState('');
+  const [autotunePreset, setAutotunePreset] = useState('off');
+  const vocalChainRef = useRef<{ ctx: AudioContext; source: MediaElementAudioSourceNode } | null>(null);
 
   const beatPlayerRef = useRef<BeatPlayer | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -197,15 +208,84 @@ export default function SessionPage() {
 
   // Mix playback
   function playMix() {
+    // Beat
     beatPlayerRef.current?.destroy();
     const keys = ['C','D','E','F','G','A'];
     beatPlayerRef.current = new BeatPlayer({ genre, mood, bpm, key: keys[Math.floor(Math.random() * keys.length)] });
     beatPlayerRef.current.setVolume(beatVolume / 100);
     beatPlayerRef.current.start();
-    if (vocalAudioRef.current) {
-      vocalAudioRef.current.volume = vocalVolume / 100;
-      vocalAudioRef.current.currentTime = 0;
-      vocalAudioRef.current.play();
+
+    // Vocals through real effects chain
+    if (vocalAudioRef.current && vocalUrl) {
+      try {
+        const ctx = vocalChainRef.current?.ctx || new AudioContext();
+        let source: MediaElementAudioSourceNode;
+        if (vocalChainRef.current?.ctx === ctx) {
+          source = vocalChainRef.current.source;
+          try { source.disconnect(); } catch {/* ok */}
+        } else {
+          source = ctx.createMediaElementSource(vocalAudioRef.current);
+        }
+        vocalChainRef.current = { ctx, source };
+
+        const preset = VOCAL_PRESETS[vocalPreset] || VOCAL_PRESETS.raw;
+        const tune = AUTOTUNE_PRESETS[autotunePreset] || AUTOTUNE_PRESETS.off;
+
+        // EQ
+        const eqLow = ctx.createBiquadFilter(); eqLow.type = 'lowshelf'; eqLow.frequency.value = 300; eqLow.gain.value = preset.eq[0];
+        const eqMid = ctx.createBiquadFilter(); eqMid.type = 'peaking'; eqMid.frequency.value = 1500; eqMid.Q.value = 1; eqMid.gain.value = preset.eq[1];
+        const eqHigh = ctx.createBiquadFilter(); eqHigh.type = 'highshelf'; eqHigh.frequency.value = 4000; eqHigh.gain.value = preset.eq[2];
+
+        // Compressor
+        const comp = ctx.createDynamicsCompressor();
+        comp.threshold.value = -24 + (preset.comp / 100) * 20;
+        comp.ratio.value = 4;
+
+        // Volume
+        const gain = ctx.createGain();
+        gain.gain.value = vocalVolume / 100;
+
+        // Chain: source → EQ → comp → gain
+        source.connect(eqLow); eqLow.connect(eqMid); eqMid.connect(eqHigh); eqHigh.connect(comp); comp.connect(gain);
+
+        // Autotune (pitch-shifted chorus layers)
+        if (tune.speed > 0) {
+          const dryGain = ctx.createGain();
+          dryGain.gain.value = 1.0 - tune.chorusDepth * 0.4;
+          gain.connect(dryGain);
+          dryGain.connect(ctx.destination);
+
+          const shifts = [tune.detune, -tune.detune];
+          if (autotunePreset === 'harmony') { shifts.push(tune.detune * 2.5, tune.detune * 4); }
+
+          shifts.forEach(cents => {
+            const del = ctx.createDelay(); del.delayTime.value = 0.003 + Math.random() * 0.004;
+            const sGain = ctx.createGain(); sGain.gain.value = tune.chorusDepth;
+            const lfo = ctx.createOscillator(); const lfoG = ctx.createGain();
+            lfo.frequency.value = 0.5 + tune.speed * 3;
+            lfoG.gain.value = cents / 12000;
+            lfo.connect(lfoG); lfoG.connect(del.delayTime); lfo.start();
+            gain.connect(del); del.connect(sGain); sGain.connect(ctx.destination);
+          });
+        } else {
+          gain.connect(ctx.destination);
+        }
+
+        // Reverb
+        if (preset.reverb > 0) {
+          const rGain = ctx.createGain(); rGain.gain.value = preset.reverb / 150;
+          const d1 = ctx.createDelay(); d1.delayTime.value = 0.02;
+          const d2 = ctx.createDelay(); d2.delayTime.value = 0.04;
+          const fb = ctx.createGain(); fb.gain.value = 0.2;
+          gain.connect(d1); d1.connect(d2); d2.connect(fb); fb.connect(d1);
+          d1.connect(rGain); d2.connect(rGain); rGain.connect(ctx.destination);
+        }
+
+        vocalAudioRef.current.currentTime = 0;
+        vocalAudioRef.current.play();
+      } catch {
+        if (vocalAudioRef.current) { vocalAudioRef.current.volume = vocalVolume / 100; vocalAudioRef.current.currentTime = 0; vocalAudioRef.current.play(); }
+      }
     }
     setIsPlaying(true);
   }
@@ -514,6 +594,24 @@ export default function SessionPage() {
                     }`}>{p.label}</button>
                 ))}
               </div>
+            </div>
+
+            {/* Autotune */}
+            <div>
+              <p className="text-xs text-gray-500 mb-2">Auto-Tune</p>
+              <div className="flex gap-1.5 justify-center flex-wrap">
+                {Object.entries(AUTOTUNE_PRESETS).map(([key, p]) => (
+                  <button key={key} onClick={() => setAutotunePreset(key)}
+                    className={`text-xs px-3 py-1.5 rounded-full transition-all ${
+                      autotunePreset === key
+                        ? key === 'off' ? 'bg-white/10 text-white border border-white/20' : 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
+                        : 'bg-white/5 text-gray-600 border border-transparent'
+                    }`}>{p.label}</button>
+                ))}
+              </div>
+              {autotunePreset !== 'off' && (
+                <p className="text-[10px] text-gray-600 mt-1 text-center">{AUTOTUNE_PRESETS[autotunePreset]?.desc}</p>
+              )}
             </div>
           </div>
 
