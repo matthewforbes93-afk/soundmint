@@ -12,6 +12,8 @@ import DrumMachine from '@/components/DrumMachine';
 import PianoRoll from '@/components/PianoRoll';
 import ArrangementMarkers from '@/components/ArrangementMarkers';
 import AutomationLane from '@/components/AutomationLane';
+import ChordGenerator from '@/components/ChordGenerator';
+import BassSynth from '@/components/BassSynth';
 import ExportDialog from '@/components/ExportDialog';
 import { useMetronome } from '@/lib/useMetronome';
 import { useKeyboardShortcuts } from '@/lib/useKeyboardShortcuts';
@@ -177,7 +179,7 @@ export default function StudioPage() {
   const [looping, setLooping] = useState(false);
   const [pos, setPos] = useState(0); // seconds
   const [selected, setSelected] = useState<string | null>(null);
-  const [bottomTab, setBottomTab] = useState<'mixer' | 'fx' | 'browser' | 'synth' | 'drums' | 'piano'>('mixer');
+  const [bottomTab, setBottomTab] = useState<'mixer' | 'fx' | 'browser' | 'synth' | 'drums' | 'piano' | 'chords' | 'bass'>('mixer');
   const [zoom, setZoom] = useState(1);
   const [meters, setMeters] = useState<Record<string, [number, number]>>({});
   const animRef = useRef(0);
@@ -728,6 +730,8 @@ export default function StudioPage() {
             { id: 'synth' as const, label: 'Synth', icon: Keyboard },
             { id: 'drums' as const, label: 'Drums', icon: Drum },
             { id: 'piano' as const, label: 'Piano Roll', icon: Piano },
+            { id: 'chords' as const, label: 'Chords', icon: Music },
+            { id: 'bass' as const, label: '808 Bass', icon: Volume2 },
             { id: 'browser' as const, label: 'Sounds', icon: Music },
           ].map(({ id, label, icon: Icon }) => (
             <button key={id} onClick={() => setBottomTab(id)}
@@ -891,6 +895,18 @@ export default function StudioPage() {
         {bottomTab === 'piano' && (
           <div className="h-56 overflow-auto p-2">
             <PianoRoll bpm={bpm} />
+          </div>
+        )}
+
+        {bottomTab === 'chords' && (
+          <div className="h-56 overflow-auto p-2">
+            <ChordGenerator />
+          </div>
+        )}
+
+        {bottomTab === 'bass' && (
+          <div className="h-56 overflow-auto p-2">
+            <BassSynth />
           </div>
         )}
       </div>
