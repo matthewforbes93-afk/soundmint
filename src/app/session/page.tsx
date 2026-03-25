@@ -426,8 +426,8 @@ export default function SessionPage() {
       {phase === 'doors' && (
         <div className="relative z-10 text-center max-w-2xl px-6">
           {/* Back to home */}
-          <a href="/" className="absolute top-0 left-6 flex items-center gap-2 text-gray-700 hover:text-white transition-colors text-xs">
-            <ChevronRight className="w-3 h-3 rotate-180" /> Home
+          <a href="/" className="absolute top-0 left-6 flex items-center gap-2 text-gray-400 hover:text-teal-400 transition-colors text-sm bg-white/5 px-3 py-1.5 rounded-lg border border-white/10 hover:border-teal-500/30">
+            <ChevronRight className="w-4 h-4 rotate-180" /> Home
           </a>
 
           <h1 className="text-4xl font-bold mb-2 tracking-tight">
