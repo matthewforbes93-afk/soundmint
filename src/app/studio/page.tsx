@@ -1,16 +1,14 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import {
-  Play, Pause, Square, SkipBack, SkipForward, Mic, CircleDot,
-  Volume2, Plus, Trash2, Upload, Download, Loader2, Save, History,
-  ChevronDown, ChevronUp, Repeat, Music, Sliders, Layers, Wand2,
-  Settings2, Headphones, Radio, Disc3, Activity
+  Play, Pause, Square, SkipBack, CircleDot, Repeat,
+  Plus, Trash2, Wand2, Mic, Piano, Headphones, Settings2,
+  Volume2, ChevronDown, ChevronUp, Save, Download, Upload,
+  Activity, Music, Layers, Sliders as SlidersIcon
 } from 'lucide-react';
-import toast from 'react-hot-toast';
-import AnalysisPanel from '@/components/AnalysisPanel';
 
-// --- Types ---
+// ─── Types ───
 interface TrackLane {
   id: string;
   name: string;
@@ -23,487 +21,511 @@ interface TrackLane {
   armed: boolean;
   audioUrl: string | null;
   waveform: number[];
-  effects: {
-    eq: { low: number; mid: number; high: number };
-    compression: { threshold: number; ratio: number };
-    reverb: number;
-    delay: number;
-  };
+  effects: { eq: [number, number, number]; comp: number; reverb: number; delay: number; chorus: number };
 }
 
-const TRACK_COLORS = [
-  'bg-red-500', 'bg-blue-500', 'bg-green-500', 'bg-purple-500',
-  'bg-yellow-500', 'bg-pink-500', 'bg-cyan-500', 'bg-orange-500',
-];
+const COLORS = ['#ef4444','#3b82f6','#22c55e','#a855f7','#f59e0b','#ec4899','#06b6d4','#f97316','#6366f1','#14b8a6'];
 
-function generateWaveform(length: number = 200): number[] {
-  return Array.from({ length }, () => Math.random() * 0.8 + 0.1);
+function wave(n: number = 300): number[] {
+  const w: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const base = Math.sin(i * 0.05) * 0.3 + 0.5;
+    w.push(base + (Math.random() - 0.5) * 0.4);
+  }
+  return w;
 }
 
-function createTrack(name: string, index: number, type: TrackLane['type'] = 'audio'): TrackLane {
+function mkTrack(name: string, i: number, type: TrackLane['type'] = 'audio', hasWave = false): TrackLane {
   return {
-    id: `track-${Date.now()}-${index}`,
-    name,
-    color: TRACK_COLORS[index % TRACK_COLORS.length],
-    type,
-    volume: 75,
-    pan: 0,
-    mute: false,
-    solo: false,
-    armed: false,
-    audioUrl: null,
-    waveform: [],
-    effects: { eq: { low: 0, mid: 0, high: 0 }, compression: { threshold: -20, ratio: 4 }, reverb: 0, delay: 0 },
+    id: `t${Date.now()}${i}`,
+    name, color: COLORS[i % COLORS.length], type,
+    volume: 80, pan: 0, mute: false, solo: false, armed: false,
+    audioUrl: null, waveform: hasWave ? wave() : [],
+    effects: { eq: [0, 0, 0], comp: 0, reverb: 0, delay: 0, chorus: 0 },
   };
 }
 
-// --- Main Studio ---
-export default function StudioPage() {
-  const [tracks, setTracks] = useState<TrackLane[]>([
-    { ...createTrack('Master', 0), waveform: generateWaveform() },
-  ]);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
-  const [bpm, setBpm] = useState(120);
-  const [key, setKey] = useState('C');
-  const [timeSignature, setTimeSignature] = useState('4/4');
-  const [position, setPosition] = useState('1.1.1');
-  const [time, setTime] = useState('0:00.0');
-  const [looping, setLooping] = useState(false);
-  const [selectedTrack, setSelectedTrack] = useState<string | null>(null);
-  const [bottomPanel, setBottomPanel] = useState<'mixer' | 'effects' | 'browser' | null>('mixer');
-  const [zoom, setZoom] = useState(1);
-  const [playheadPos, setPlayheadPos] = useState(0);
-  const animRef = useRef<number>(0);
-  const startTimeRef = useRef<number>(0);
+// ─── Level Meter Component ───
+function Meter({ value, peak = false, size = 'md' }: { value: number; peak?: boolean; size?: 'sm' | 'md' }) {
+  const h = size === 'sm' ? 'h-1' : 'h-1.5';
+  const count = size === 'sm' ? 16 : 20;
+  return (
+    <div className="flex flex-col-reverse gap-[1px]">
+      {Array.from({ length: count }, (_, i) => {
+        const pct = i / count;
+        const on = pct < value;
+        let color = 'bg-emerald-500';
+        if (pct > 0.85) color = 'bg-red-500';
+        else if (pct > 0.7) color = 'bg-yellow-500';
+        return <div key={i} className={`w-1.5 ${h} rounded-[1px] transition-opacity duration-75 ${on ? color : 'bg-white/5'}`} />;
+      })}
+    </div>
+  );
+}
 
-  // Playback animation
-  useEffect(() => {
-    if (isPlaying) {
-      startTimeRef.current = Date.now() - playheadPos * 1000;
-      const animate = () => {
-        const elapsed = (Date.now() - startTimeRef.current) / 1000;
-        setPlayheadPos(elapsed);
-        const mins = Math.floor(elapsed / 60);
-        const secs = (elapsed % 60).toFixed(1);
-        setTime(`${mins}:${secs.padStart(4, '0')}`);
-        const beat = Math.floor(elapsed * bpm / 60);
-        const bar = Math.floor(beat / 4) + 1;
-        const beatInBar = (beat % 4) + 1;
-        setPosition(`${bar}.${beatInBar}.1`);
-        animRef.current = requestAnimationFrame(animate);
-      };
-      animRef.current = requestAnimationFrame(animate);
-    } else {
-      cancelAnimationFrame(animRef.current);
-    }
-    return () => cancelAnimationFrame(animRef.current);
-  }, [isPlaying, bpm, playheadPos]);
-
-  function addTrack(type: TrackLane['type'] = 'audio') {
-    const names: Record<string, string> = { audio: `Audio ${tracks.length + 1}`, midi: `MIDI ${tracks.length + 1}`, ai: `AI Track ${tracks.length + 1}` };
-    setTracks(prev => [...prev, { ...createTrack(names[type], prev.length, type), waveform: type === 'ai' ? generateWaveform() : [] }]);
-  }
-
-  function removeTrack(id: string) {
-    setTracks(prev => prev.filter(t => t.id !== id));
-  }
-
-  function updateTrack(id: string, updates: Partial<TrackLane>) {
-    setTracks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
-  }
-
-  function togglePlay() {
-    setIsPlaying(!isPlaying);
-    setIsRecording(false);
-  }
-
-  function stop() {
-    setIsPlaying(false);
-    setIsRecording(false);
-    setPlayheadPos(0);
-    setTime('0:00.0');
-    setPosition('1.1.1');
-  }
-
-  function toggleRecord() {
-    setIsRecording(!isRecording);
-    if (!isRecording) setIsPlaying(true);
-  }
+// ─── Knob Component ───
+function Knob({ value, onChange, label, color = 'purple', min = 0, max = 100 }: {
+  value: number; onChange: (v: number) => void; label: string; color?: string; min?: number; max?: number;
+}) {
+  const pct = (value - min) / (max - min);
+  const angle = -135 + pct * 270;
+  const colors: Record<string, string> = { purple: '#a855f7', blue: '#3b82f6', green: '#22c55e', yellow: '#f59e0b', pink: '#ec4899', cyan: '#06b6d4' };
+  const c = colors[color] || colors.purple;
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-gray-950">
-      {/* ===== TOP TRANSPORT BAR ===== */}
-      <div className="h-14 bg-gray-900/80 backdrop-blur-xl border-b border-gray-800/50 flex items-center px-4 gap-2 flex-shrink-0">
-        {/* Transport Controls */}
-        <div className="flex items-center gap-1 mr-4">
-          <button onClick={stop} className="w-8 h-8 flex items-center justify-center rounded hover:bg-gray-800 text-gray-400 hover:text-white">
-            <SkipBack className="w-4 h-4" />
+    <div className="flex flex-col items-center gap-1">
+      <div className="relative w-8 h-8 cursor-pointer"
+        onMouseDown={(e) => {
+          const startY = e.clientY;
+          const startVal = value;
+          const onMove = (ev: MouseEvent) => {
+            const delta = (startY - ev.clientY) * ((max - min) / 100);
+            onChange(Math.max(min, Math.min(max, Math.round(startVal + delta))));
+          };
+          const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp);
+        }}>
+        <svg viewBox="0 0 32 32" className="w-full h-full">
+          <circle cx="16" cy="16" r="13" fill="#1a1a2e" stroke="#2a2a3e" strokeWidth="1.5" />
+          <circle cx="16" cy="16" r="13" fill="none" stroke={c} strokeWidth="2" strokeDasharray={`${pct * 55} 100`}
+            strokeLinecap="round" transform="rotate(-135 16 16)" opacity="0.6" />
+          <line x1="16" y1="16" x2="16" y2="5" stroke={c} strokeWidth="2" strokeLinecap="round"
+            transform={`rotate(${angle} 16 16)`} />
+        </svg>
+      </div>
+      <span className="text-[8px] text-gray-500 uppercase tracking-wider">{label}</span>
+    </div>
+  );
+}
+
+// ─── Channel Strip Component ───
+function ChannelStrip({ track, meters, onUpdate, selected, onSelect }: {
+  track: TrackLane; meters: [number, number]; onUpdate: (u: Partial<TrackLane>) => void; selected: boolean; onSelect: () => void;
+}) {
+  return (
+    <div onClick={onSelect}
+      className={`w-[72px] flex-shrink-0 flex flex-col items-center rounded-xl border transition-all cursor-pointer ${
+        selected ? 'bg-white/[0.04] border-purple-500/30 shadow-lg shadow-purple-500/5' : 'bg-white/[0.02] border-white/5 hover:border-white/10'
+      }`}>
+      {/* Track name */}
+      <div className="w-full px-2 pt-2 pb-1">
+        <div className="flex items-center gap-1 mb-1">
+          <div className="w-2 h-2 rounded-full" style={{ background: track.color }} />
+          <span className="text-[9px] text-gray-300 font-medium truncate">{track.name}</span>
+        </div>
+        <span className="text-[8px] text-gray-600">{track.type.toUpperCase()}</span>
+      </div>
+
+      {/* Pan knob */}
+      <Knob value={track.pan} onChange={(v) => onUpdate({ pan: v })} label="Pan" min={-100} max={100} color="cyan" />
+
+      {/* Fader + Meters */}
+      <div className="flex items-end gap-1 px-1 py-2 flex-1">
+        <Meter value={meters[0]} />
+        <div className="flex flex-col items-center">
+          <input type="range" min={0} max={100} value={track.volume}
+            onChange={(e) => onUpdate({ volume: parseInt(e.target.value) })}
+            className="appearance-none cursor-pointer w-1.5 rounded-full"
+            style={{ writingMode: 'vertical-lr', direction: 'rtl', height: 90,
+              background: `linear-gradient(to top, ${track.color}44, ${track.color}11)` }} />
+          <span className="text-[9px] text-gray-500 mt-1 font-mono">{track.volume}</span>
+        </div>
+        <Meter value={meters[1]} />
+      </div>
+
+      {/* M / S / R buttons */}
+      <div className="flex gap-0.5 pb-2">
+        <button onClick={(e) => { e.stopPropagation(); onUpdate({ mute: !track.mute }); }}
+          className={`text-[8px] w-5 h-5 rounded font-bold flex items-center justify-center ${track.mute ? 'bg-red-500/40 text-red-300' : 'bg-white/5 text-gray-600 hover:text-gray-300'}`}>M</button>
+        <button onClick={(e) => { e.stopPropagation(); onUpdate({ solo: !track.solo }); }}
+          className={`text-[8px] w-5 h-5 rounded font-bold flex items-center justify-center ${track.solo ? 'bg-yellow-500/40 text-yellow-300' : 'bg-white/5 text-gray-600 hover:text-gray-300'}`}>S</button>
+        <button onClick={(e) => { e.stopPropagation(); onUpdate({ armed: !track.armed }); }}
+          className={`text-[8px] w-5 h-5 rounded font-bold flex items-center justify-center ${track.armed ? 'bg-red-600 text-white' : 'bg-white/5 text-gray-600 hover:text-gray-300'}`}>R</button>
+      </div>
+    </div>
+  );
+}
+
+// ═══ MAIN STUDIO PAGE ═══
+export default function StudioPage() {
+  const [tracks, setTracks] = useState<TrackLane[]>([
+    mkTrack('Drums', 0, 'audio', true),
+    mkTrack('Bass', 1, 'audio', true),
+    mkTrack('Keys', 2, 'midi', true),
+    mkTrack('Vocals', 3, 'audio', true),
+    mkTrack('Synth Pad', 4, 'ai', true),
+  ]);
+  const [playing, setPlaying] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [bpm, setBpm] = useState(120);
+  const [key, setKey] = useState('C');
+  const [timeSig, setTimeSig] = useState('4/4');
+  const [looping, setLooping] = useState(false);
+  const [pos, setPos] = useState(0); // seconds
+  const [selected, setSelected] = useState<string | null>(null);
+  const [bottomTab, setBottomTab] = useState<'mixer' | 'fx' | 'browser'>('mixer');
+  const [zoom, setZoom] = useState(1);
+  const [meters, setMeters] = useState<Record<string, [number, number]>>({});
+  const animRef = useRef(0);
+  const startRef = useRef(0);
+
+  // Animate playhead + meters
+  useEffect(() => {
+    if (playing) {
+      startRef.current = performance.now() - pos * 1000;
+      const tick = () => {
+        const t = (performance.now() - startRef.current) / 1000;
+        setPos(t);
+        // Simulate meters
+        const m: Record<string, [number, number]> = {};
+        tracks.forEach(tr => {
+          if (tr.mute) { m[tr.id] = [0, 0]; return; }
+          const base = (tr.volume / 100) * (tr.waveform.length > 0 ? 0.7 : 0.1);
+          m[tr.id] = [base + Math.random() * 0.25, base + Math.random() * 0.25];
+        });
+        setMeters(m);
+        animRef.current = requestAnimationFrame(tick);
+      };
+      animRef.current = requestAnimationFrame(tick);
+    } else {
+      cancelAnimationFrame(animRef.current);
+      if (!playing) {
+        const m: Record<string, [number, number]> = {};
+        tracks.forEach(tr => { m[tr.id] = [0, 0]; });
+        setMeters(m);
+      }
+    }
+    return () => cancelAnimationFrame(animRef.current);
+  }, [playing, tracks]);
+
+  function upd(id: string, u: Partial<TrackLane>) {
+    setTracks(p => p.map(t => t.id === id ? { ...t, ...u } : t));
+  }
+
+  function addTrack(type: TrackLane['type']) {
+    const n = tracks.length;
+    const names: Record<string, string> = { audio: `Audio ${n+1}`, midi: `MIDI ${n+1}`, ai: `AI ${n+1}` };
+    setTracks(p => [...p, mkTrack(names[type], n, type, type === 'ai')]);
+  }
+
+  const bar = Math.floor(pos * bpm / 60 / 4) + 1;
+  const beat = Math.floor(pos * bpm / 60) % 4 + 1;
+  const mins = Math.floor(pos / 60);
+  const secs = (pos % 60).toFixed(1);
+  const totalBars = 32;
+  const pxPerBar = 80 * zoom;
+  const playPx = (pos * bpm / 60 / 4) * pxPerBar;
+
+  // Master meter
+  const masterL = playing ? Math.min(0.95, tracks.reduce((s, t) => s + (meters[t.id]?.[0] || 0), 0) / Math.max(tracks.length, 1) * 1.5) : 0;
+  const masterR = playing ? Math.min(0.95, tracks.reduce((s, t) => s + (meters[t.id]?.[1] || 0), 0) / Math.max(tracks.length, 1) * 1.5) : 0;
+
+  return (
+    <div className="flex flex-col flex-1 overflow-hidden select-none" style={{ background: 'linear-gradient(180deg, #0c0c14 0%, #080810 100%)' }}>
+
+      {/* ═══ TRANSPORT BAR ═══ */}
+      <div className="h-12 flex items-center px-3 gap-3 border-b border-white/5 flex-shrink-0"
+        style={{ background: 'linear-gradient(180deg, #13131f, #0e0e18)' }}>
+
+        {/* Transport buttons */}
+        <div className="flex items-center gap-1">
+          <button onClick={() => { setPlaying(false); setPos(0); }} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5"><SkipBack className="w-3.5 h-3.5" /></button>
+          <button onClick={() => { setPlaying(!playing); setRecording(false); }}
+            className={`w-9 h-9 flex items-center justify-center rounded-lg transition-all ${playing ? 'bg-gradient-to-b from-white to-gray-200 text-black shadow-lg shadow-white/10' : 'bg-white/10 text-white hover:bg-white/15'}`}>
+            {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
           </button>
-          <button onClick={togglePlay}
-            className={`w-10 h-10 flex items-center justify-center rounded-lg transition-all ${isPlaying ? 'bg-white text-black' : 'bg-gray-800 text-white hover:bg-gray-700'}`}>
-            {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
-          </button>
-          <button onClick={stop} className="w-8 h-8 flex items-center justify-center rounded hover:bg-gray-800 text-gray-400 hover:text-white">
-            <Square className="w-3.5 h-3.5" />
-          </button>
-          <button onClick={toggleRecord}
-            className={`w-10 h-10 flex items-center justify-center rounded-lg transition-all ${isRecording ? 'bg-red-600 text-white animate-pulse' : 'bg-gray-800 text-red-400 hover:bg-gray-700'}`}>
+          <button onClick={() => { setPlaying(false); setRecording(false); setPos(0); }} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5"><Square className="w-3 h-3" /></button>
+          <button onClick={() => { setRecording(!recording); if (!recording) setPlaying(true); }}
+            className={`w-9 h-9 flex items-center justify-center rounded-lg transition-all ${recording ? 'bg-red-600 text-white shadow-lg shadow-red-600/20 animate-pulse' : 'bg-white/5 text-red-400/60 hover:text-red-400 hover:bg-white/10'}`}>
             <CircleDot className="w-4 h-4" />
           </button>
           <button onClick={() => setLooping(!looping)}
-            className={`w-8 h-8 flex items-center justify-center rounded transition-all ${looping ? 'bg-purple-600/30 text-purple-400' : 'text-gray-500 hover:text-white'}`}>
-            <Repeat className="w-4 h-4" />
+            className={`w-7 h-7 flex items-center justify-center rounded-md ${looping ? 'text-purple-400 bg-purple-500/10' : 'text-gray-600 hover:text-gray-300'}`}>
+            <Repeat className="w-3.5 h-3.5" />
           </button>
         </div>
 
-        {/* Position Display */}
-        <div className="bg-black/60 rounded-lg px-4 py-1.5 flex items-center gap-4 border border-gray-800/50 mr-4">
-          <div className="text-center">
-            <p className="text-[10px] text-gray-500 uppercase tracking-wider">Position</p>
-            <p className="text-sm font-mono text-green-400 font-bold">{position}</p>
+        {/* Display */}
+        <div className="flex items-center gap-0.5 bg-black/40 rounded-lg px-3 py-1 border border-white/5 font-mono">
+          <div className="pr-3 border-r border-white/5">
+            <p className="text-[8px] text-gray-600">BAR</p>
+            <p className="text-lg text-emerald-400 font-bold leading-none">{bar}<span className="text-emerald-400/40">.{beat}</span></p>
           </div>
-          <div className="w-px h-6 bg-gray-800" />
-          <div className="text-center">
-            <p className="text-[10px] text-gray-500 uppercase tracking-wider">Time</p>
-            <p className="text-sm font-mono text-green-400 font-bold">{time}</p>
+          <div className="pl-3">
+            <p className="text-[8px] text-gray-600">TIME</p>
+            <p className="text-lg text-emerald-400 font-bold leading-none">{mins}:{secs.padStart(4, '0')}</p>
           </div>
         </div>
 
-        {/* BPM / Key / Time Sig */}
-        <div className="flex items-center gap-2 mr-4">
-          <div className="bg-gray-800/50 rounded-lg px-3 py-1.5 border border-gray-700/30">
-            <p className="text-[10px] text-gray-500 uppercase">BPM</p>
+        {/* BPM / Key / Sig */}
+        <div className="flex items-center gap-1.5">
+          <div className="bg-white/[0.03] rounded-lg px-2.5 py-1 border border-white/5">
+            <p className="text-[7px] text-gray-600 uppercase">Tempo</p>
             <input type="number" value={bpm} onChange={(e) => setBpm(parseInt(e.target.value) || 120)}
-              className="w-12 bg-transparent text-sm font-mono text-white font-bold focus:outline-none" />
+              className="w-10 bg-transparent text-sm font-mono text-white font-bold focus:outline-none" />
           </div>
-          <div className="bg-gray-800/50 rounded-lg px-3 py-1.5 border border-gray-700/30">
-            <p className="text-[10px] text-gray-500 uppercase">Key</p>
+          <div className="bg-white/[0.03] rounded-lg px-2.5 py-1 border border-white/5">
+            <p className="text-[7px] text-gray-600 uppercase">Key</p>
             <select value={key} onChange={(e) => setKey(e.target.value)}
-              className="bg-transparent text-sm font-mono text-white font-bold focus:outline-none cursor-pointer">
-              {['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'].map(k =>
-                <option key={k} value={k} className="bg-gray-900">{k}</option>
-              )}
+              className="bg-transparent text-sm font-mono text-white font-bold focus:outline-none cursor-pointer appearance-none">
+              {['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'].map(k => <option key={k} value={k} className="bg-gray-900">{k}</option>)}
             </select>
           </div>
-          <div className="bg-gray-800/50 rounded-lg px-3 py-1.5 border border-gray-700/30">
-            <p className="text-[10px] text-gray-500 uppercase">Time</p>
-            <select value={timeSignature} onChange={(e) => setTimeSignature(e.target.value)}
-              className="bg-transparent text-sm font-mono text-white font-bold focus:outline-none cursor-pointer">
-              {['4/4', '3/4', '6/8', '2/4', '5/4'].map(ts =>
-                <option key={ts} value={ts} className="bg-gray-900">{ts}</option>
-              )}
+          <div className="bg-white/[0.03] rounded-lg px-2.5 py-1 border border-white/5">
+            <p className="text-[7px] text-gray-600 uppercase">Sig</p>
+            <select value={timeSig} onChange={(e) => setTimeSig(e.target.value)}
+              className="bg-transparent text-sm font-mono text-white font-bold focus:outline-none cursor-pointer appearance-none">
+              {['4/4','3/4','6/8'].map(t => <option key={t} value={t} className="bg-gray-900">{t}</option>)}
             </select>
           </div>
         </div>
 
-        {/* Spacer */}
         <div className="flex-1" />
 
-        {/* Right side controls */}
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 bg-gray-800/50 rounded-lg px-2 py-1 border border-gray-700/30">
-            <span className="text-[10px] text-gray-500">Zoom</span>
-            <input type="range" min={0.5} max={3} step={0.1} value={zoom} onChange={(e) => setZoom(parseFloat(e.target.value))}
-              className="w-16 accent-purple-500" />
-          </div>
-          <button className="w-8 h-8 flex items-center justify-center rounded hover:bg-gray-800 text-gray-400 hover:text-white">
-            <Headphones className="w-4 h-4" />
-          </button>
-          <button className="w-8 h-8 flex items-center justify-center rounded hover:bg-gray-800 text-gray-400 hover:text-white">
-            <Settings2 className="w-4 h-4" />
-          </button>
+        {/* Right controls */}
+        <div className="flex items-center gap-1.5">
+          <span className="text-[9px] text-gray-600">Zoom</span>
+          <input type="range" min={0.3} max={3} step={0.1} value={zoom} onChange={(e) => setZoom(parseFloat(e.target.value))}
+            className="w-16 accent-purple-500" />
+          <button className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5"><Save className="w-3.5 h-3.5" /></button>
+          <button className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5"><Download className="w-3.5 h-3.5" /></button>
         </div>
       </div>
 
-      {/* ===== MAIN AREA ===== */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* ===== TRACK LIST + TIMELINE ===== */}
+      {/* ═══ TIMELINE + TRACKS ═══ */}
+      <div className="flex-1 flex overflow-hidden">
         <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Timeline ruler */}
-          <div className="h-8 bg-gray-900/50 border-b border-gray-800/30 flex flex-shrink-0">
-            <div className="w-60 flex-shrink-0 border-r border-gray-800/30 flex items-center px-3">
-              <span className="text-[10px] text-gray-500 uppercase tracking-wider">Tracks ({tracks.length})</span>
-            </div>
-            <div className="flex-1 relative overflow-hidden">
-              {/* Bar markers */}
-              <div className="flex h-full items-end">
-                {Array.from({ length: Math.ceil(32 * zoom) }, (_, i) => (
-                  <div key={i} className="flex-shrink-0 border-l border-gray-800/30 h-full flex items-end px-1"
-                    style={{ width: `${100 / (32 * zoom)}%`, minWidth: 40 }}>
-                    <span className="text-[9px] text-gray-600 mb-1">{i + 1}</span>
+          {/* Ruler */}
+          <div className="h-6 border-b border-white/5 flex flex-shrink-0 bg-white/[0.01]">
+            <div className="w-52 flex-shrink-0 border-r border-white/5" />
+            <div className="flex-1 overflow-hidden relative">
+              <div className="flex h-full" style={{ width: totalBars * pxPerBar }}>
+                {Array.from({ length: totalBars }, (_, i) => (
+                  <div key={i} className="border-l border-white/5 flex items-end px-1" style={{ width: pxPerBar }}>
+                    <span className="text-[9px] text-gray-700 mb-0.5">{i + 1}</span>
                   </div>
                 ))}
-              </div>
-              {/* Playhead */}
-              <div className="absolute top-0 bottom-0 w-0.5 bg-green-400 z-20 transition-none"
-                style={{ left: `${(playheadPos / (32 * 60 / bpm)) * 100}%` }}>
-                <div className="w-2.5 h-2.5 bg-green-400 rounded-full -ml-1" />
               </div>
             </div>
           </div>
 
-          {/* Track lanes */}
-          <div className="flex-1 overflow-y-auto">
+          {/* Tracks */}
+          <div className="flex-1 overflow-auto">
             {tracks.map((track) => (
               <div key={track.id}
-                className={`flex border-b border-gray-800/20 h-20 group ${selectedTrack === track.id ? 'bg-gray-800/20' : 'hover:bg-gray-800/10'}`}
-                onClick={() => setSelectedTrack(track.id)}>
+                onClick={() => setSelected(track.id)}
+                className={`flex h-[72px] border-b border-white/[0.03] group cursor-pointer transition-colors ${selected === track.id ? 'bg-white/[0.025]' : 'hover:bg-white/[0.015]'}`}>
 
                 {/* Track header */}
-                <div className="w-60 flex-shrink-0 border-r border-gray-800/30 p-2 flex flex-col justify-between">
+                <div className="w-52 flex-shrink-0 border-r border-white/5 px-2 py-1.5 flex flex-col justify-between">
                   <div className="flex items-center gap-2">
-                    <div className={`w-2 h-8 rounded-full ${track.color}`} />
-                    <div className="flex-1 min-w-0">
-                      <input type="text" value={track.name}
-                        onChange={(e) => updateTrack(track.id, { name: e.target.value })}
-                        className="text-xs font-medium text-white bg-transparent w-full focus:outline-none focus:bg-gray-800 rounded px-1" />
-                      <p className="text-[10px] text-gray-600 px-1">{track.type.toUpperCase()}</p>
+                    <div className="w-1.5 h-10 rounded-full" style={{ background: track.color }} />
+                    <div>
+                      <input type="text" value={track.name} onChange={(e) => upd(track.id, { name: e.target.value })}
+                        className="text-[11px] font-semibold text-white bg-transparent w-28 focus:outline-none focus:bg-white/5 rounded px-0.5" />
+                      <div className="flex items-center gap-1 mt-0.5">
+                        <span className="text-[8px] px-1 py-px rounded bg-white/5 text-gray-500">{track.type}</span>
+                      </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
-                    <button onClick={(e) => { e.stopPropagation(); updateTrack(track.id, { mute: !track.mute }); }}
-                      className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${track.mute ? 'bg-red-500/30 text-red-400' : 'bg-gray-800 text-gray-500 hover:text-gray-300'}`}>M</button>
-                    <button onClick={(e) => { e.stopPropagation(); updateTrack(track.id, { solo: !track.solo }); }}
-                      className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${track.solo ? 'bg-yellow-500/30 text-yellow-400' : 'bg-gray-800 text-gray-500 hover:text-gray-300'}`}>S</button>
-                    <button onClick={(e) => { e.stopPropagation(); updateTrack(track.id, { armed: !track.armed }); }}
-                      className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${track.armed ? 'bg-red-600 text-white' : 'bg-gray-800 text-gray-500 hover:text-gray-300'}`}>R</button>
+                    <button onClick={(e) => { e.stopPropagation(); upd(track.id, { mute: !track.mute }); }}
+                      className={`text-[8px] w-5 h-4 rounded font-bold flex items-center justify-center ${track.mute ? 'bg-red-500/30 text-red-400' : 'bg-white/5 text-gray-600'}`}>M</button>
+                    <button onClick={(e) => { e.stopPropagation(); upd(track.id, { solo: !track.solo }); }}
+                      className={`text-[8px] w-5 h-4 rounded font-bold flex items-center justify-center ${track.solo ? 'bg-yellow-500/30 text-yellow-400' : 'bg-white/5 text-gray-600'}`}>S</button>
+                    <button onClick={(e) => { e.stopPropagation(); upd(track.id, { armed: !track.armed }); }}
+                      className={`text-[8px] w-5 h-4 rounded font-bold flex items-center justify-center ${track.armed ? 'bg-red-600 text-white' : 'bg-white/5 text-gray-600'}`}>R</button>
                     <input type="range" min={0} max={100} value={track.volume}
-                      onChange={(e) => updateTrack(track.id, { volume: parseInt(e.target.value) })}
-                      className="w-14 accent-purple-500 ml-1" />
-                    <span className="text-[9px] text-gray-500 w-6">{track.volume}</span>
-                    <button onClick={(e) => { e.stopPropagation(); removeTrack(track.id); }}
-                      className="ml-auto opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400">
-                      <Trash2 className="w-3 h-3" />
-                    </button>
+                      onChange={(e) => upd(track.id, { volume: parseInt(e.target.value) })}
+                      className="w-16 accent-purple-500 ml-auto" style={{ height: 3 }} />
+                    <button onClick={(e) => { e.stopPropagation(); setTracks(p => p.filter(t => t.id !== track.id)); }}
+                      className="opacity-0 group-hover:opacity-100 text-gray-700 hover:text-red-400 ml-1"><Trash2 className="w-3 h-3" /></button>
                   </div>
                 </div>
 
-                {/* Waveform area */}
+                {/* Waveform */}
                 <div className="flex-1 relative overflow-hidden">
-                  {track.waveform.length > 0 ? (
-                    <div className="absolute inset-0 flex items-center px-1">
-                      <div className={`h-full w-3/4 rounded-md ${track.mute ? 'opacity-30' : 'opacity-80'} flex items-center overflow-hidden`}
-                        style={{ background: `linear-gradient(90deg, ${track.color.replace('bg-', '').replace('-500', '')}22, ${track.color.replace('bg-', '').replace('-500', '')}11)` }}>
-                        <svg viewBox="0 0 200 60" className="w-full h-full" preserveAspectRatio="none">
+                  {track.waveform.length > 0 && (
+                    <div className="absolute inset-y-1 left-1 right-1">
+                      <div className={`h-full rounded-md overflow-hidden ${track.mute ? 'opacity-20' : ''}`}
+                        style={{ background: `${track.color}08`, border: `1px solid ${track.color}20`, width: `${60 * zoom}%` }}>
+                        <svg viewBox={`0 0 ${track.waveform.length} 100`} preserveAspectRatio="none" className="w-full h-full">
                           {track.waveform.map((v, i) => (
-                            <rect key={i} x={i} y={30 - v * 25} width={0.8} height={v * 50}
-                              className={track.color.replace('bg-', 'fill-').replace('-500', '-400')} opacity={0.7} />
+                            <rect key={i} x={i} y={50 - v * 40} width={0.7} height={v * 80}
+                              fill={track.color} opacity={0.5} />
                           ))}
                         </svg>
                       </div>
                     </div>
-                  ) : (
+                  )}
+                  {track.waveform.length === 0 && (
                     <div className="absolute inset-0 flex items-center justify-center">
-                      <p className="text-[10px] text-gray-700">Empty — record or drop audio here</p>
+                      <span className="text-[9px] text-gray-800">Drop audio or record</span>
                     </div>
                   )}
-                  {/* Playhead line */}
-                  <div className="absolute top-0 bottom-0 w-0.5 bg-green-400/50 z-10"
-                    style={{ left: `${(playheadPos / (32 * 60 / bpm)) * 100}%` }} />
+                  {/* Playhead */}
+                  <div className="absolute top-0 bottom-0 w-px bg-emerald-400 z-10 pointer-events-none" style={{ left: playPx }} />
                 </div>
               </div>
             ))}
 
-            {/* Add track button */}
-            <div className="h-12 flex items-center border-b border-gray-800/20">
-              <div className="w-60 flex-shrink-0 border-r border-gray-800/30 px-3 flex gap-2">
-                <button onClick={() => addTrack('audio')}
-                  className="flex items-center gap-1 text-[10px] text-gray-500 hover:text-purple-400 px-2 py-1 rounded hover:bg-gray-800">
-                  <Plus className="w-3 h-3" /> Audio
-                </button>
-                <button onClick={() => addTrack('midi')}
-                  className="flex items-center gap-1 text-[10px] text-gray-500 hover:text-blue-400 px-2 py-1 rounded hover:bg-gray-800">
-                  <Plus className="w-3 h-3" /> MIDI
-                </button>
-                <button onClick={() => addTrack('ai')}
-                  className="flex items-center gap-1 text-[10px] text-gray-500 hover:text-pink-400 px-2 py-1 rounded hover:bg-gray-800">
-                  <Wand2 className="w-3 h-3" /> AI
-                </button>
+            {/* Add track */}
+            <div className="h-10 flex items-center border-b border-white/[0.03]">
+              <div className="w-52 flex-shrink-0 border-r border-white/5 px-3 flex gap-1.5">
+                {[
+                  { type: 'audio' as const, icon: Mic, label: 'Audio', color: 'text-green-500' },
+                  { type: 'midi' as const, icon: Piano, label: 'MIDI', color: 'text-blue-500' },
+                  { type: 'ai' as const, icon: Wand2, label: 'AI', color: 'text-pink-500' },
+                ].map(({ type, icon: Icon, label, color }) => (
+                  <button key={type} onClick={() => addTrack(type)}
+                    className={`flex items-center gap-1 text-[9px] ${color} opacity-40 hover:opacity-100 px-2 py-1 rounded hover:bg-white/5 transition-all`}>
+                    <Icon className="w-3 h-3" /> {label}
+                  </button>
+                ))}
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* ===== BOTTOM PANEL ===== */}
-      <div className="flex-shrink-0 border-t border-gray-800/50">
-        {/* Panel tabs */}
-        <div className="h-8 bg-gray-900/50 flex items-center px-2 gap-1">
+      {/* ═══ BOTTOM: MIXER / FX / BROWSER ═══ */}
+      <div className="flex-shrink-0 border-t border-white/5" style={{ background: 'linear-gradient(180deg, #0e0e18, #0a0a12)' }}>
+        {/* Tabs */}
+        <div className="h-7 flex items-center px-2 gap-0.5 border-b border-white/[0.03]">
           {[
-            { id: 'mixer' as const, label: 'Mixer', icon: Sliders },
-            { id: 'effects' as const, label: 'Effects', icon: Activity },
-            { id: 'browser' as const, label: 'Browser', icon: Music },
+            { id: 'mixer' as const, label: 'Mixer', icon: SlidersIcon },
+            { id: 'fx' as const, label: 'Effects', icon: Activity },
+            { id: 'browser' as const, label: 'Sounds', icon: Music },
           ].map(({ id, label, icon: Icon }) => (
-            <button key={id} onClick={() => setBottomPanel(bottomPanel === id ? null : id)}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded text-[11px] font-medium transition-colors ${
-                bottomPanel === id ? 'bg-purple-600/20 text-purple-400' : 'text-gray-500 hover:text-white hover:bg-gray-800/50'
+            <button key={id} onClick={() => setBottomTab(id)}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-medium transition-all ${
+                bottomTab === id ? 'bg-white/[0.06] text-white' : 'text-gray-600 hover:text-gray-300'
               }`}>
               <Icon className="w-3 h-3" /> {label}
             </button>
           ))}
         </div>
 
-        {/* Panel content */}
-        {bottomPanel && (
-          <div className="h-48 bg-gray-900/30 overflow-auto">
-            {bottomPanel === 'mixer' && (
-              <div className="flex h-full p-2 gap-1 overflow-x-auto">
-                {tracks.map((track) => (
-                  <div key={track.id} className="w-20 flex-shrink-0 bg-gray-800/30 rounded-lg p-2 flex flex-col items-center border border-gray-800/30">
-                    <div className={`w-1.5 h-1.5 rounded-full ${track.color} mb-1`} />
-                    <p className="text-[9px] text-gray-400 truncate w-full text-center mb-1">{track.name}</p>
+        {/* MIXER */}
+        {bottomTab === 'mixer' && (
+          <div className="h-56 flex p-2 gap-1.5 overflow-x-auto">
+            {tracks.map((track) => (
+              <ChannelStrip key={track.id} track={track} meters={meters[track.id] || [0, 0]}
+                onUpdate={(u) => upd(track.id, u)} selected={selected === track.id} onSelect={() => setSelected(track.id)} />
+            ))}
 
-                    {/* Pan knob */}
-                    <div className="text-[8px] text-gray-600 mb-0.5">PAN</div>
-                    <input type="range" min={-100} max={100} value={track.pan}
-                      onChange={(e) => updateTrack(track.id, { pan: parseInt(e.target.value) })}
-                      className="w-14 accent-purple-500 mb-1" />
-
-                    {/* Volume fader */}
-                    <div className="flex-1 flex flex-col items-center justify-end">
-                      <input type="range" min={0} max={100} value={track.volume}
-                        onChange={(e) => updateTrack(track.id, { volume: parseInt(e.target.value) })}
-                        className="w-2 accent-green-500 appearance-none cursor-pointer"
-                        style={{ writingMode: 'vertical-lr', direction: 'rtl', height: 60 }} />
-                      <span className="text-[9px] text-gray-500 mt-1">{track.volume}</span>
-                    </div>
-
-                    {/* Mute/Solo */}
-                    <div className="flex gap-1 mt-1">
-                      <button onClick={() => updateTrack(track.id, { mute: !track.mute })}
-                        className={`text-[8px] px-1 py-0.5 rounded font-bold ${track.mute ? 'bg-red-500/30 text-red-400' : 'bg-gray-700 text-gray-500'}`}>M</button>
-                      <button onClick={() => updateTrack(track.id, { solo: !track.solo })}
-                        className={`text-[8px] px-1 py-0.5 rounded font-bold ${track.solo ? 'bg-yellow-500/30 text-yellow-400' : 'bg-gray-700 text-gray-500'}`}>S</button>
-                    </div>
-                  </div>
-                ))}
-
-                {/* Master fader */}
-                <div className="w-24 flex-shrink-0 bg-gray-800/50 rounded-lg p-2 flex flex-col items-center border border-purple-800/20">
-                  <p className="text-[9px] text-purple-400 font-bold mb-2">MASTER</p>
-                  <div className="flex-1 flex items-center gap-1">
-                    {/* Level meters */}
-                    <div className="flex flex-col gap-px h-full justify-end">
-                      {Array.from({ length: 12 }, (_, i) => (
-                        <div key={i} className={`w-1.5 h-1.5 rounded-sm ${
-                          i < 3 ? 'bg-red-500' : i < 5 ? 'bg-yellow-500' : 'bg-green-500'
-                        } ${i < (isPlaying ? 8 + Math.floor(Math.random() * 4) : 0) ? 'opacity-80' : 'opacity-10'}`} />
-                      ))}
-                    </div>
-                    <input type="range" min={0} max={100} value={80}
-                      className="w-2 accent-purple-500 appearance-none cursor-pointer"
-                      style={{ writingMode: 'vertical-lr', direction: 'rtl', height: 80 }} />
-                    <div className="flex flex-col gap-px h-full justify-end">
-                      {Array.from({ length: 12 }, (_, i) => (
-                        <div key={i} className={`w-1.5 h-1.5 rounded-sm ${
-                          i < 3 ? 'bg-red-500' : i < 5 ? 'bg-yellow-500' : 'bg-green-500'
-                        } ${i < (isPlaying ? 7 + Math.floor(Math.random() * 5) : 0) ? 'opacity-80' : 'opacity-10'}`} />
-                      ))}
-                    </div>
-                  </div>
-                  <span className="text-[9px] text-gray-500 mt-1">0 dB</span>
+            {/* MASTER channel */}
+            <div className="w-24 flex-shrink-0 flex flex-col items-center rounded-xl bg-gradient-to-b from-purple-500/5 to-transparent border border-purple-500/10">
+              <div className="pt-2 pb-1">
+                <span className="text-[9px] text-purple-400 font-bold tracking-wider">MASTER</span>
+              </div>
+              <Knob value={80} onChange={() => {}} label="Vol" color="purple" />
+              <div className="flex items-end gap-2 flex-1 pb-2">
+                <div className="flex flex-col-reverse gap-[1px]">
+                  {Array.from({ length: 24 }, (_, i) => {
+                    const pct = i / 24;
+                    const on = pct < masterL;
+                    let color = 'bg-emerald-500';
+                    if (pct > 0.85) color = 'bg-red-500';
+                    else if (pct > 0.7) color = 'bg-yellow-500';
+                    return <div key={i} className={`w-2 h-1 rounded-[1px] transition-opacity duration-75 ${on ? color : 'bg-white/5'}`} />;
+                  })}
+                </div>
+                <div className="flex flex-col-reverse gap-[1px]">
+                  {Array.from({ length: 24 }, (_, i) => {
+                    const pct = i / 24;
+                    const on = pct < masterR;
+                    let color = 'bg-emerald-500';
+                    if (pct > 0.85) color = 'bg-red-500';
+                    else if (pct > 0.7) color = 'bg-yellow-500';
+                    return <div key={i} className={`w-2 h-1 rounded-[1px] transition-opacity duration-75 ${on ? color : 'bg-white/5'}`} />;
+                  })}
                 </div>
               </div>
-            )}
+              <span className="text-[9px] text-gray-500 font-mono pb-2">0 dB</span>
+            </div>
+          </div>
+        )}
 
-            {bottomPanel === 'effects' && selectedTrack && (
-              <div className="p-4">
-                <div className="flex gap-4">
+        {/* EFFECTS */}
+        {bottomTab === 'fx' && (
+          <div className="h-56 p-3 overflow-auto">
+            {selected ? (() => {
+              const t = tracks.find(tr => tr.id === selected);
+              if (!t) return null;
+              return (
+                <div className="flex gap-3">
                   {/* EQ */}
-                  <div className="bg-gray-800/30 rounded-lg p-3 border border-gray-800/30 flex-1">
-                    <p className="text-[10px] text-purple-400 font-bold mb-2">PARAMETRIC EQ</p>
-                    {(['low', 'mid', 'high'] as const).map(band => {
-                      const track = tracks.find(t => t.id === selectedTrack);
-                      return (
-                        <div key={band} className="flex items-center gap-2 mb-1">
-                          <span className="text-[9px] text-gray-500 w-6 uppercase">{band}</span>
-                          <input type="range" min={-12} max={12} value={track?.effects.eq[band] || 0}
-                            onChange={(e) => {
-                              const t = tracks.find(tr => tr.id === selectedTrack);
-                              if (t) updateTrack(t.id, { effects: { ...t.effects, eq: { ...t.effects.eq, [band]: parseInt(e.target.value) } } });
-                            }}
-                            className="flex-1 accent-purple-500" />
-                          <span className="text-[9px] text-gray-500 w-8">{track?.effects.eq[band] || 0}dB</span>
+                  <div className="flex-1 bg-white/[0.02] rounded-xl p-3 border border-white/5">
+                    <p className="text-[10px] text-purple-400 font-bold mb-3">PARAMETRIC EQ</p>
+                    <div className="flex gap-4 items-end justify-center h-24">
+                      {(['LOW', 'MID', 'HIGH'] as const).map((band, i) => (
+                        <div key={band} className="flex flex-col items-center">
+                          <Knob value={t.effects.eq[i]} onChange={(v) => {
+                            const eq: [number, number, number] = [...t.effects.eq];
+                            eq[i] = v;
+                            upd(t.id, { effects: { ...t.effects, eq } });
+                          }} label={band} min={-12} max={12} color="purple" />
+                          <span className="text-[8px] text-gray-600 mt-1">{t.effects.eq[i] > 0 ? '+' : ''}{t.effects.eq[i]}dB</span>
                         </div>
-                      );
-                    })}
+                      ))}
+                    </div>
                   </div>
-                  {/* Compressor */}
-                  <div className="bg-gray-800/30 rounded-lg p-3 border border-gray-800/30 flex-1">
-                    <p className="text-[10px] text-blue-400 font-bold mb-2">COMPRESSOR</p>
-                    {(() => {
-                      const track = tracks.find(t => t.id === selectedTrack);
-                      return (
-                        <>
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="text-[9px] text-gray-500 w-10">Thresh</span>
-                            <input type="range" min={-40} max={0} value={track?.effects.compression.threshold || -20}
-                              onChange={(e) => { if (track) updateTrack(track.id, { effects: { ...track.effects, compression: { ...track.effects.compression, threshold: parseInt(e.target.value) } } }); }}
-                              className="flex-1 accent-blue-500" />
-                            <span className="text-[9px] text-gray-500 w-10">{track?.effects.compression.threshold}dB</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-[9px] text-gray-500 w-10">Ratio</span>
-                            <input type="range" min={1} max={20} value={track?.effects.compression.ratio || 4}
-                              onChange={(e) => { if (track) updateTrack(track.id, { effects: { ...track.effects, compression: { ...track.effects.compression, ratio: parseInt(e.target.value) } } }); }}
-                              className="flex-1 accent-blue-500" />
-                            <span className="text-[9px] text-gray-500 w-10">{track?.effects.compression.ratio}:1</span>
-                          </div>
-                        </>
-                      );
-                    })()}
+                  {/* Dynamics */}
+                  <div className="flex-1 bg-white/[0.02] rounded-xl p-3 border border-white/5">
+                    <p className="text-[10px] text-blue-400 font-bold mb-3">COMPRESSOR</p>
+                    <div className="flex gap-4 items-end justify-center h-24">
+                      <Knob value={t.effects.comp} onChange={(v) => upd(t.id, { effects: { ...t.effects, comp: v } })} label="Amount" color="blue" />
+                    </div>
                   </div>
-                  {/* Reverb & Delay */}
-                  <div className="bg-gray-800/30 rounded-lg p-3 border border-gray-800/30 flex-1">
-                    <p className="text-[10px] text-green-400 font-bold mb-2">REVERB / DELAY</p>
-                    {(() => {
-                      const track = tracks.find(t => t.id === selectedTrack);
-                      return (
-                        <>
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="text-[9px] text-gray-500 w-10">Reverb</span>
-                            <input type="range" min={0} max={100} value={track?.effects.reverb || 0}
-                              onChange={(e) => { if (track) updateTrack(track.id, { effects: { ...track.effects, reverb: parseInt(e.target.value) } }); }}
-                              className="flex-1 accent-green-500" />
-                            <span className="text-[9px] text-gray-500 w-8">{track?.effects.reverb}%</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-[9px] text-gray-500 w-10">Delay</span>
-                            <input type="range" min={0} max={100} value={track?.effects.delay || 0}
-                              onChange={(e) => { if (track) updateTrack(track.id, { effects: { ...track.effects, delay: parseInt(e.target.value) } }); }}
-                              className="flex-1 accent-green-500" />
-                            <span className="text-[9px] text-gray-500 w-8">{track?.effects.delay}%</span>
-                          </div>
-                        </>
-                      );
-                    })()}
+                  {/* Reverb */}
+                  <div className="flex-1 bg-white/[0.02] rounded-xl p-3 border border-white/5">
+                    <p className="text-[10px] text-emerald-400 font-bold mb-3">REVERB</p>
+                    <div className="flex gap-4 items-end justify-center h-24">
+                      <Knob value={t.effects.reverb} onChange={(v) => upd(t.id, { effects: { ...t.effects, reverb: v } })} label="Size" color="green" />
+                    </div>
+                  </div>
+                  {/* Delay */}
+                  <div className="flex-1 bg-white/[0.02] rounded-xl p-3 border border-white/5">
+                    <p className="text-[10px] text-yellow-400 font-bold mb-3">DELAY</p>
+                    <div className="flex gap-4 items-end justify-center h-24">
+                      <Knob value={t.effects.delay} onChange={(v) => upd(t.id, { effects: { ...t.effects, delay: v } })} label="Time" color="yellow" />
+                    </div>
+                  </div>
+                  {/* Chorus */}
+                  <div className="flex-1 bg-white/[0.02] rounded-xl p-3 border border-white/5">
+                    <p className="text-[10px] text-pink-400 font-bold mb-3">CHORUS</p>
+                    <div className="flex gap-4 items-end justify-center h-24">
+                      <Knob value={t.effects.chorus} onChange={(v) => upd(t.id, { effects: { ...t.effects, chorus: v } })} label="Depth" color="pink" />
+                    </div>
                   </div>
                 </div>
-              </div>
+              );
+            })() : (
+              <div className="h-full flex items-center justify-center text-gray-700 text-sm">Select a track to edit effects</div>
             )}
+          </div>
+        )}
 
-            {bottomPanel === 'effects' && !selectedTrack && (
-              <div className="h-full flex items-center justify-center text-gray-600 text-sm">
-                Select a track to edit effects
-              </div>
-            )}
-
-            {bottomPanel === 'browser' && (
-              <div className="p-4 grid grid-cols-4 gap-2">
-                {['Kick', 'Snare', 'Hi-Hat', 'Clap', 'Bass 808', 'Piano Loop', 'Guitar Riff', 'Vocal Chop',
-                  'Pad Ambient', 'Synth Lead', 'String Section', 'FX Riser', 'Brass Hit', 'Drum Loop', 'Vinyl Noise', 'Bell'
-                ].map(sample => (
-                  <button key={sample}
-                    className="bg-gray-800/30 hover:bg-gray-800/60 border border-gray-800/30 rounded-lg p-2 text-left transition-colors group">
-                    <div className="flex items-center gap-2">
-                      <Play className="w-3 h-3 text-gray-600 group-hover:text-purple-400" />
-                      <span className="text-[11px] text-gray-400 group-hover:text-white">{sample}</span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
+        {/* BROWSER */}
+        {bottomTab === 'browser' && (
+          <div className="h-56 p-3 overflow-auto">
+            <div className="grid grid-cols-6 gap-1.5">
+              {['Kick 808', 'Snare Crack', 'Hi-Hat Closed', 'Hi-Hat Open', 'Clap', 'Rim Shot',
+                'Bass Sub', 'Bass Pluck', 'Piano Chord', 'Guitar Clean', 'Guitar Dist', 'Strings Pad',
+                'Synth Lead', 'Synth Pad', 'Vocal Chop', 'Ad-Lib', 'FX Riser', 'FX Impact',
+                'Brass Stab', 'Flute Melody', 'Bell Chime', 'Percussion', 'Shaker', 'Vinyl Noise',
+              ].map(sample => (
+                <button key={sample}
+                  className="bg-white/[0.02] hover:bg-white/[0.05] border border-white/[0.03] hover:border-white/10 rounded-lg p-2 text-left transition-all group">
+                  <div className="flex items-center gap-1.5">
+                    <Play className="w-2.5 h-2.5 text-gray-700 group-hover:text-purple-400 transition-colors" />
+                    <span className="text-[10px] text-gray-500 group-hover:text-white transition-colors">{sample}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
           </div>
         )}
       </div>
