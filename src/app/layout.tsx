@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Geist } from 'next/font/google';
 import './globals.css';
 import Sidebar from '@/components/Sidebar';
@@ -8,8 +8,16 @@ import { Toaster } from 'react-hot-toast';
 const geist = Geist({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'SoundMint - Mint Your Music Empire',
-  description: 'Generate, publish, and monetize AI music across all streaming platforms.',
+  title: 'SoundMint - Professional Music Studio',
+  description: 'Professional music production studio in your browser. Compose, record, mix, master, distribute.',
+  manifest: '/manifest.json',
+};
+
+export const viewport: Viewport = {
+  themeColor: '#14b8a6',
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
