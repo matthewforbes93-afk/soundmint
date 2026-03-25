@@ -14,6 +14,7 @@ import ArrangementMarkers from '@/components/ArrangementMarkers';
 import AutomationLane from '@/components/AutomationLane';
 import ChordGenerator from '@/components/ChordGenerator';
 import BassSynth from '@/components/BassSynth';
+import AnalysisPanel from '@/components/AnalysisPanel';
 import ExportDialog from '@/components/ExportDialog';
 import { useMetronome } from '@/lib/useMetronome';
 import { useKeyboardShortcuts } from '@/lib/useKeyboardShortcuts';
@@ -186,6 +187,29 @@ export default function StudioPage() {
   const startRef = useRef(0);
   const [metronomeOn, setMetronomeOn] = useState(false);
   const [showExport, setShowExport] = useState(false);
+  const trackHistoryRef = useRef<TrackLane[][]>([]);
+  const trackHistoryIdxRef = useRef(-1);
+
+  function pushHistory(newTracks: TrackLane[]) {
+    trackHistoryRef.current = trackHistoryRef.current.slice(0, trackHistoryIdxRef.current + 1);
+    trackHistoryRef.current.push(JSON.parse(JSON.stringify(newTracks)));
+    if (trackHistoryRef.current.length > 30) trackHistoryRef.current.shift();
+    else trackHistoryIdxRef.current++;
+  }
+
+  function undo() {
+    if (trackHistoryIdxRef.current > 0) {
+      trackHistoryIdxRef.current--;
+      setTracks(JSON.parse(JSON.stringify(trackHistoryRef.current[trackHistoryIdxRef.current])));
+    }
+  }
+
+  function redo() {
+    if (trackHistoryIdxRef.current < trackHistoryRef.current.length - 1) {
+      trackHistoryIdxRef.current++;
+      setTracks(JSON.parse(JSON.stringify(trackHistoryRef.current[trackHistoryIdxRef.current])));
+    }
+  }
   const [sections, setSections] = useState<{ id: string; name: string; startBar: number; color: string }[]>([]);
   const [recordingTrackId, setRecordingTrackId] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -208,8 +232,8 @@ export default function StudioPage() {
     ' ': () => { setPlaying(p => !p); setRecording(false); },
     'r': () => { setRecording(r => !r); if (!recording) setPlaying(true); },
     'm': () => setMetronomeOn(m => !m),
-    'cmd+z': () => { /* undo */ },
-    'cmd+shift+z': () => { /* redo */ },
+    'cmd+z': undo,
+    'cmd+shift+z': redo,
   });
 
   // Metronome
@@ -490,7 +514,11 @@ export default function StudioPage() {
   }, [playing]);
 
   function upd(id: string, u: Partial<TrackLane>) {
-    setTracks(p => p.map(t => t.id === id ? { ...t, ...u } : t));
+    setTracks(p => {
+      const next = p.map(t => t.id === id ? { ...t, ...u } : t);
+      pushHistory(next);
+      return next;
+    });
   }
 
   function addTrack(type: TrackLane['type']) {
@@ -585,8 +613,8 @@ export default function StudioPage() {
           <span className="text-[9px] text-gray-600">Zoom</span>
           <input type="range" min={0.3} max={3} step={0.1} value={zoom} onChange={(e) => setZoom(parseFloat(e.target.value))}
             className="w-16 accent-purple-500" />
-          <button onClick={() => { /* undo */ }} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5" title="Undo"><Undo2 className="w-3.5 h-3.5" /></button>
-          <button onClick={() => { /* redo */ }} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5" title="Redo"><Redo2 className="w-3.5 h-3.5" /></button>
+          <button onClick={undo} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5" title="Undo (Cmd+Z)"><Undo2 className="w-3.5 h-3.5" /></button>
+          <button onClick={redo} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5" title="Redo (Cmd+Shift+Z)"><Redo2 className="w-3.5 h-3.5" /></button>
           <button className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5" title="Save"><Save className="w-3.5 h-3.5" /></button>
           <button onClick={() => setShowExport(true)} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5" title="Export Song"><Download className="w-3.5 h-3.5" /></button>
         </div>
@@ -617,6 +645,22 @@ export default function StudioPage() {
               <React.Fragment key={track.id}>
               <div
                 onClick={() => setSelected(track.id)}
+                onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
+                onDrop={async (e) => {
+                  e.preventDefault();
+                  const file = e.dataTransfer.files[0];
+                  if (!file || !file.type.startsWith('audio/')) return;
+                  const formData = new FormData();
+                  formData.append('file', file);
+                  formData.append('title', file.name.replace(/\.[^.]+$/, ''));
+                  try {
+                    const res = await fetch('/api/upload', { method: 'POST', body: formData });
+                    const data = await res.json();
+                    if (res.ok && data.audio_url) {
+                      upd(track.id, { audioUrl: data.audio_url, name: file.name.replace(/\.[^.]+$/, ''), waveform: wave() });
+                    }
+                  } catch { /* ignore */ }
+                }}
                 className={`flex h-[72px] border-b border-white/[0.03] group cursor-pointer transition-colors ${
                   recordingTrackId === track.id ? 'bg-red-500/[0.06] ring-1 ring-inset ring-red-500/20' :
                   selected === track.id ? 'bg-white/[0.025]' : 'hover:bg-white/[0.015]'
@@ -839,7 +883,10 @@ export default function StudioPage() {
                 </div>
               );
             })() : (
-              <div className="h-full flex items-center justify-center text-gray-700 text-sm">Select a track to edit effects</div>
+              <div className="h-full flex items-center gap-4 px-4">
+                <span className="text-gray-700 text-sm">Select a track to edit effects</span>
+                <AnalysisPanel audioUrl={tracks.find(t => t.audioUrl)?.audioUrl || null} />
+              </div>
             )}
           </div>
         )}
