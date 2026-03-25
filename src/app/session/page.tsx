@@ -9,6 +9,55 @@ type Step = 'setup' | 'generate' | 'preview' | 'record' | 'mix' | 'export';
 const GENRES = ['lo-fi', 'hip-hop', 'rap', 'trap', 'pop', 'r&b', 'jazz', 'electronic', 'ambient', 'cinematic', 'afrobeat', 'latin'];
 const MOODS = ['chill', 'energetic', 'dark', 'uplifting', 'romantic', 'aggressive', 'dreamy', 'epic'];
 
+// Smart auto-detect genre/mood/bpm from keywords in song title
+function autoDetect(title: string): { genre: string; mood: string; bpm: number } {
+  const t = title.toLowerCase();
+  // Genre detection
+  const genreMap: Record<string, string[]> = {
+    'trap': ['trap', 'drip', 'ice', 'gang', 'stack', 'plug'],
+    'rap': ['bars', 'flow', 'spit', 'rap', 'freestyle', 'cypher'],
+    'hip-hop': ['hood', 'street', 'block', 'hustle', 'grind', 'real'],
+    'r&b': ['love', 'heart', 'baby', 'feel', 'touch', 'kiss', 'boo'],
+    'pop': ['dance', 'party', 'fun', 'summer', 'happy', 'shine'],
+    'lo-fi': ['chill', 'study', 'relax', 'rain', 'coffee', 'night', 'sleep', 'dream'],
+    'electronic': ['rave', 'bass', 'drop', 'synth', 'techno', 'pulse'],
+    'jazz': ['smooth', 'jazz', 'swing', 'groove', 'blue'],
+    'cinematic': ['epic', 'hero', 'rise', 'battle', 'war', 'glory'],
+    'afrobeat': ['afro', 'vibe', 'africa', 'tribal', 'rhythm'],
+    'latin': ['fuego', 'caliente', 'sol', 'latin', 'reggaeton'],
+    'ambient': ['space', 'float', 'cosmos', 'ethereal', 'void', 'horizon'],
+  };
+  let genre = 'hip-hop';
+  for (const [g, keywords] of Object.entries(genreMap)) {
+    if (keywords.some(k => t.includes(k))) { genre = g; break; }
+  }
+
+  // Mood detection
+  const moodMap: Record<string, string[]> = {
+    'aggressive': ['angry', 'rage', 'war', 'fight', 'kill', 'gang', 'hard'],
+    'dark': ['dark', 'shadow', 'death', 'demon', 'night', 'void'],
+    'uplifting': ['rise', 'glory', 'shine', 'hero', 'win', 'fly', 'free'],
+    'romantic': ['love', 'heart', 'baby', 'kiss', 'forever', 'boo'],
+    'energetic': ['party', 'dance', 'hype', 'turn', 'lit', 'go'],
+    'chill': ['chill', 'relax', 'vibe', 'smooth', 'easy', 'cool'],
+    'dreamy': ['dream', 'float', 'cloud', 'sky', 'star', 'moon'],
+    'epic': ['epic', 'battle', 'kingdom', 'legend', 'throne'],
+  };
+  let mood = 'chill';
+  for (const [m, keywords] of Object.entries(moodMap)) {
+    if (keywords.some(k => t.includes(k))) { mood = m; break; }
+  }
+
+  // BPM by genre
+  const bpmMap: Record<string, number> = {
+    'trap': 140, 'rap': 130, 'hip-hop': 90, 'r&b': 75, 'pop': 120,
+    'lo-fi': 80, 'electronic': 128, 'jazz': 100, 'cinematic': 95,
+    'afrobeat': 110, 'latin': 100, 'ambient': 70,
+  };
+
+  return { genre, mood, bpm: bpmMap[genre] || 90 };
+}
+
 export default function SessionPage() {
   const [step, setStep] = useState<Step>('setup');
   const [artistName, setArtistName] = useState('');
@@ -26,6 +75,8 @@ export default function SessionPage() {
   const [exportUrl, setExportUrl] = useState<string | null>(null);
   const [beatVolume, setBeatVolume] = useState(70);
   const [vocalVolume, setVocalVolume] = useState(100);
+  const [autoMode, setAutoMode] = useState(true);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const beatAudioRef = useRef<HTMLAudioElement>(null);
   const vocalAudioRef = useRef<HTMLAudioElement>(null);
@@ -42,6 +93,24 @@ export default function SessionPage() {
   ];
 
   const currentStepIdx = steps.findIndex(s => s.id === step);
+
+  // Auto-detect when title changes
+  function handleTitleChange(title: string) {
+    setSongTitle(title);
+    if (autoMode && title.length > 2) {
+      const detected = autoDetect(title);
+      setGenre(detected.genre);
+      setMood(detected.mood);
+      setBpm(detected.bpm);
+    }
+  }
+
+  // Quick start — just enter name + title, everything else is automatic
+  function quickStart() {
+    if (!artistName.trim()) return toast.error('Enter your artist name');
+    if (!songTitle.trim()) return toast.error('Enter a song title');
+    generateBeat();
+  }
 
   // --- Step 2: Generate beat ---
   async function generateBeat() {
@@ -243,7 +312,7 @@ export default function SessionPage() {
       {step === 'setup' && (
         <div className="bg-gray-900 border border-gray-800 rounded-2xl p-8">
           <h1 className="text-2xl font-bold text-white mb-1">New Session</h1>
-          <p className="text-gray-400 text-sm mb-6">Set up your song details, then we'll create a beat for you.</p>
+          <p className="text-gray-400 text-sm mb-6">Enter your name and song title — we'll handle the rest.</p>
 
           <div className="space-y-4">
             <div>
@@ -252,30 +321,54 @@ export default function SessionPage() {
             </div>
             <div>
               <label className="text-sm text-gray-300 mb-1.5 block">Song Title</label>
-              <input type="text" value={songTitle} onChange={e => setSongTitle(e.target.value)} placeholder="Name this track" className={inputClass} />
-            </div>
-            <div>
-              <label className="text-sm text-gray-300 mb-1.5 block">Genre</label>
-              <div className="flex flex-wrap gap-2">
-                {GENRES.map(g => <button key={g} onClick={() => setGenre(g)} className={chip(genre === g)}>{g}</button>)}
-              </div>
-            </div>
-            <div>
-              <label className="text-sm text-gray-300 mb-1.5 block">Mood</label>
-              <div className="flex flex-wrap gap-2">
-                {MOODS.map(m => <button key={m} onClick={() => setMood(m)} className={chip(mood === m)}>{m}</button>)}
-              </div>
-            </div>
-            <div>
-              <label className="text-sm text-gray-300 mb-1.5 block">BPM: {bpm}</label>
-              <input type="range" min={60} max={180} value={bpm} onChange={e => setBpm(parseInt(e.target.value))} className="w-full accent-teal-500" />
+              <input type="text" value={songTitle} onChange={e => handleTitleChange(e.target.value)} placeholder="e.g., Midnight Hustle, Love in the Rain, Street Dreams..." className={inputClass} />
             </div>
 
-            <button onClick={generateBeat}
+            {/* Auto-detected preview */}
+            {songTitle.length > 2 && (
+              <div className="bg-teal-500/5 border border-teal-500/10 rounded-lg p-3">
+                <p className="text-[10px] text-teal-400 font-medium mb-2">AUTO-DETECTED</p>
+                <div className="flex gap-2 flex-wrap">
+                  <span className="text-xs px-2 py-1 rounded bg-teal-500/10 text-teal-300">{genre}</span>
+                  <span className="text-xs px-2 py-1 rounded bg-teal-500/10 text-teal-300">{mood}</span>
+                  <span className="text-xs px-2 py-1 rounded bg-teal-500/10 text-teal-300">{bpm} BPM</span>
+                </div>
+              </div>
+            )}
+
+            {/* Quick start button */}
+            <button onClick={quickStart}
               disabled={!artistName.trim() || !songTitle.trim()}
-              className="w-full bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white font-medium py-3 rounded-lg flex items-center justify-center gap-2 mt-4">
-              <Wand2 className="w-4 h-4" /> Create Beat <ChevronRight className="w-4 h-4" />
+              className="w-full bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white font-medium py-4 rounded-lg flex items-center justify-center gap-2 text-lg">
+              <Wand2 className="w-5 h-5" /> Create My Beat <ChevronRight className="w-5 h-5" />
             </button>
+
+            {/* Advanced options toggle */}
+            <button onClick={() => setShowAdvanced(!showAdvanced)}
+              className="w-full text-center text-xs text-gray-500 hover:text-gray-300 py-2">
+              {showAdvanced ? 'Hide options' : 'Customize genre, mood & BPM'}
+            </button>
+
+            {showAdvanced && (
+              <div className="space-y-4 border border-white/5 rounded-lg p-4">
+                <div>
+                  <label className="text-sm text-gray-300 mb-1.5 block">Genre</label>
+                  <div className="flex flex-wrap gap-2">
+                    {GENRES.map(g => <button key={g} onClick={() => { setGenre(g); setAutoMode(false); }} className={chip(genre === g)}>{g}</button>)}
+                  </div>
+                </div>
+                <div>
+                  <label className="text-sm text-gray-300 mb-1.5 block">Mood</label>
+                  <div className="flex flex-wrap gap-2">
+                    {MOODS.map(m => <button key={m} onClick={() => { setMood(m); setAutoMode(false); }} className={chip(mood === m)}>{m}</button>)}
+                  </div>
+                </div>
+                <div>
+                  <label className="text-sm text-gray-300 mb-1.5 block">BPM: {bpm}</label>
+                  <input type="range" min={60} max={180} value={bpm} onChange={e => { setBpm(parseInt(e.target.value)); setAutoMode(false); }} className="w-full accent-teal-500" />
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
