@@ -330,13 +330,56 @@ export default function SessionPage() {
 
   // ═══ RENDER ═══
   return (
-    <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center relative overflow-hidden">
+    <div className="h-screen bg-black text-white flex flex-col relative overflow-hidden">
       {/* Ambient glow */}
       <div className="absolute inset-0 pointer-events-none">
         <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full transition-all duration-1000 ${
           isRecording ? 'bg-red-500/[0.03] scale-110' : 'bg-teal-500/[0.02] scale-100'
         } blur-3xl`} />
       </div>
+
+      {/* ═══ TOP BAR — always visible except doors ═══ */}
+      {phase !== 'doors' && (
+        <div className="relative z-20 h-12 flex items-center justify-between px-4 border-b border-white/5 flex-shrink-0">
+          <button onClick={() => {
+            if (phase === 'setup') { setPhase('doors'); setDoor(null); }
+            else if (phase === 'booth') { stopAll(); setPhase('setup'); }
+            else if (phase === 'mix') { stopAll(); setPhase('booth'); }
+            else if (phase === 'done') { setPhase('mix'); }
+            else { setPhase('doors'); setDoor(null); }
+          }} className="flex items-center gap-2 text-gray-500 hover:text-white transition-colors">
+            <ChevronRight className="w-4 h-4 rotate-180" />
+            <span className="text-xs">Back</span>
+          </button>
+
+          <div className="text-center">
+            {songTitle ? (
+              <>
+                <p className="text-sm font-semibold text-white leading-none">{songTitle}</p>
+                <p className="text-[10px] text-gray-600">{artistName}{genre ? ` · ${genre} · ${bpm} BPM` : ''}</p>
+              </>
+            ) : (
+              <p className="text-xs text-gray-600">New Session</p>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            {vocalUrl && phase !== 'done' && (
+              <button onClick={exportSong} disabled={exporting}
+                className="text-xs px-3 py-1 bg-teal-600 hover:bg-teal-700 rounded-lg text-white flex items-center gap-1">
+                {exporting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+                Export
+              </button>
+            )}
+            <button onClick={reset} className="text-gray-700 hover:text-white">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ MAIN CONTENT — fills remaining space ═══ */}
+      <div className="flex-1 flex items-center justify-center overflow-auto">
 
       {/* ═══ DOOR SELECT ═══ */}
       {phase === 'doors' && (
@@ -669,6 +712,7 @@ export default function SessionPage() {
           </div>
         </div>
       )}
+      </div>{/* close main content wrapper */}
     </div>
   );
 }
