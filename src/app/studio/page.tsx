@@ -19,6 +19,30 @@ import ExportDialog from '@/components/ExportDialog';
 import { useMetronome } from '@/lib/useMetronome';
 import { useKeyboardShortcuts } from '@/lib/useKeyboardShortcuts';
 
+// ─── WAV Encoder ───
+function audioBufferToWav(buffer: AudioBuffer): ArrayBuffer {
+  const numChannels = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const length = buffer.length * numChannels * 2 + 44;
+  const out = new ArrayBuffer(length);
+  const view = new DataView(out);
+  const writeStr = (offset: number, str: string) => { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)); };
+  writeStr(0, 'RIFF'); view.setUint32(4, length - 8, true); writeStr(8, 'WAVE');
+  writeStr(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  view.setUint16(22, numChannels, true); view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * numChannels * 2, true); view.setUint16(32, numChannels * 2, true);
+  view.setUint16(34, 16, true); writeStr(36, 'data'); view.setUint32(40, length - 44, true);
+  let offset = 44;
+  for (let i = 0; i < buffer.length; i++) {
+    for (let ch = 0; ch < numChannels; ch++) {
+      const sample = Math.max(-1, Math.min(1, buffer.getChannelData(ch)[i]));
+      view.setInt16(offset, sample * 0x7FFF, true);
+      offset += 2;
+    }
+  }
+  return out;
+}
+
 // ─── Types ───
 interface TrackLane {
   id: string;
@@ -279,10 +303,23 @@ export default function StudioPage() {
       recorder.onstop = async () => {
         stream.getTracks().forEach(t => t.stop());
         (window as unknown as Record<string, unknown>).__recAnalyser = null;
-        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-        if (blob.size < 1000) return; // Too short, discard
+        const webmBlob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        if (webmBlob.size < 1000) return; // Too short, discard
 
-        const file = new File([blob], `studio-rec-${Date.now()}.webm`, { type: 'audio/webm' });
+        // Convert WebM to WAV so Web Audio can decode it later
+        let file: File;
+        try {
+          const convCtx = new AudioContext();
+          const arrayBuf = await webmBlob.arrayBuffer();
+          const audioBuf = await convCtx.decodeAudioData(arrayBuf);
+          const wavBuf = audioBufferToWav(audioBuf);
+          const wavBlob = new Blob([wavBuf], { type: 'audio/wav' });
+          file = new File([wavBlob], `studio-rec-${Date.now()}.wav`, { type: 'audio/wav' });
+          convCtx.close();
+        } catch {
+          // Fallback: upload as webm anyway
+          file = new File([webmBlob], `studio-rec-${Date.now()}.webm`, { type: 'audio/webm' });
+        }
         const formData = new FormData();
         formData.append('file', file);
         formData.append('title', armedTrack.name);
@@ -409,11 +446,15 @@ export default function StudioPage() {
       tracks.forEach(async (track) => {
         if (!track.audioUrl || track.mute) return;
         if (audioSourcesRef.current[track.id]?.source) return; // Already playing
+        // Skip webm files — Web Audio can't decode them reliably
+        if (track.audioUrl.endsWith('.webm')) return;
 
         try {
           const res = await fetch(track.audioUrl);
+          if (!res.ok) return;
           const arrayBuf = await res.arrayBuffer();
-          const audioBuf = await ctx.decodeAudioData(arrayBuf);
+          if (arrayBuf.byteLength < 100) return; // Too small / empty
+          const audioBuf = await ctx.decodeAudioData(arrayBuf.slice(0)); // slice to avoid detached buffer
 
           const source = ctx.createBufferSource();
           const gain = ctx.createGain();

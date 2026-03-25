@@ -68,8 +68,34 @@ export default function RecorderPage() {
     if (!audioBlob) return;
     setSaving(true);
     try {
-      // Convert webm to a proper file
-      const file = new File([audioBlob], `recording-${Date.now()}.webm`, { type: 'audio/webm' });
+      // Convert webm to WAV for compatibility
+      let file: File;
+      try {
+        const ctx = new AudioContext();
+        const arrayBuf = await audioBlob.arrayBuffer();
+        const audioBuf = await ctx.decodeAudioData(arrayBuf);
+        const numCh = audioBuf.numberOfChannels;
+        const sr = audioBuf.sampleRate;
+        const len = audioBuf.length * numCh * 2 + 44;
+        const wav = new ArrayBuffer(len);
+        const v = new DataView(wav);
+        const ws = (o: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+        ws(0,'RIFF'); v.setUint32(4,len-8,true); ws(8,'WAVE'); ws(12,'fmt ');
+        v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,numCh,true);
+        v.setUint32(24,sr,true); v.setUint32(28,sr*numCh*2,true); v.setUint16(32,numCh*2,true);
+        v.setUint16(34,16,true); ws(36,'data'); v.setUint32(40,len-44,true);
+        let off = 44;
+        for (let i = 0; i < audioBuf.length; i++) {
+          for (let ch = 0; ch < numCh; ch++) {
+            const s = Math.max(-1, Math.min(1, audioBuf.getChannelData(ch)[i]));
+            v.setInt16(off, s * 0x7FFF, true); off += 2;
+          }
+        }
+        file = new File([wav], `recording-${Date.now()}.wav`, { type: 'audio/wav' });
+        ctx.close();
+      } catch {
+        file = new File([audioBlob], `recording-${Date.now()}.webm`, { type: 'audio/webm' });
+      }
 
       // Upload directly via our API
       const formData = new FormData();
