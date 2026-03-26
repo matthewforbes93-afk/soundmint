@@ -102,11 +102,28 @@ export class BeatPlayer {
   private config: BeatConfig;
   private masterGain: GainNode;
 
+  // Stereo buses for spatial placement
+  private hhPan: StereoPannerNode;
+  private clapPan: StereoPannerNode;
+  private chordPanL: StereoPannerNode;
+  private chordPanR: StereoPannerNode;
+
   constructor(config: BeatConfig) {
     this.ctx = new AudioContext();
     this.config = config;
     this.masterGain = this.ctx.createGain();
     this.masterGain.gain.value = 0.7;
+
+    // Stereo placement
+    this.hhPan = this.ctx.createStereoPanner(); this.hhPan.pan.value = 0.35; // Hihats slightly right
+    this.clapPan = this.ctx.createStereoPanner(); this.clapPan.pan.value = -0.15; // Clap slightly left
+    this.chordPanL = this.ctx.createStereoPanner(); this.chordPanL.pan.value = -0.5; // Chords wide left
+    this.chordPanR = this.ctx.createStereoPanner(); this.chordPanR.pan.value = 0.5; // Chords wide right
+
+    this.hhPan.connect(this.masterGain);
+    this.clapPan.connect(this.masterGain);
+    this.chordPanL.connect(this.masterGain);
+    this.chordPanR.connect(this.masterGain);
     this.masterGain.connect(this.ctx.destination);
   }
 
@@ -202,7 +219,7 @@ export class BeatPlayer {
     const gain = this.ctx.createGain();
     const hp = this.ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 7000;
     const bp = this.ctx.createBiquadFilter(); bp.type = 'peaking'; bp.frequency.value = 10000; bp.Q.value = 2; bp.gain.value = 6;
-    src.connect(hp); hp.connect(bp); bp.connect(gain); gain.connect(this.masterGain);
+    src.connect(hp); hp.connect(bp); bp.connect(gain); gain.connect(this.hhPan);
     gain.gain.setValueAtTime(vel, t);
     gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
     src.start(t);
@@ -212,7 +229,7 @@ export class BeatPlayer {
     const ringGain = this.ctx.createGain();
     ring.type = 'square';
     ring.frequency.value = 12000 + Math.random() * 2000;
-    ring.connect(ringGain); ringGain.connect(this.masterGain);
+    ring.connect(ringGain); ringGain.connect(this.hhPan);
     ringGain.gain.setValueAtTime(vel * 0.1, t);
     ringGain.gain.exponentialRampToValueAtTime(0.001, t + duration * 0.5);
     ring.start(t); ring.stop(t + duration);
@@ -232,7 +249,7 @@ export class BeatPlayer {
       const src = this.ctx.createBufferSource(); src.buffer = buf;
       const gain = this.ctx.createGain();
       const bp = this.ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 2000 + Math.random() * 500; bp.Q.value = 1.5;
-      src.connect(bp); bp.connect(gain); gain.connect(this.masterGain);
+      src.connect(bp); bp.connect(gain); gain.connect(this.clapPan);
       gain.gain.setValueAtTime(vel * (0.6 + i * 0.1), t + offset);
       gain.gain.exponentialRampToValueAtTime(0.001, t + offset + 0.12);
       src.start(t + offset);
@@ -246,7 +263,7 @@ export class BeatPlayer {
     const tail = this.ctx.createBufferSource(); tail.buffer = tailBuf;
     const tailGain = this.ctx.createGain();
     const tailBP = this.ctx.createBiquadFilter(); tailBP.type = 'bandpass'; tailBP.frequency.value = 1500; tailBP.Q.value = 0.5;
-    tail.connect(tailBP); tailBP.connect(tailGain); tailGain.connect(this.masterGain);
+    tail.connect(tailBP); tailBP.connect(tailGain); tailGain.connect(this.clapPan);
     tailGain.gain.setValueAtTime(vel * 0.25, t + 0.03);
     tailGain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
     tail.start(t + 0.03);
@@ -267,7 +284,9 @@ export class BeatPlayer {
       saw.type = 'sawtooth';
       saw.frequency.value = freq;
       sawFilter.type = 'lowpass'; sawFilter.frequency.value = 1500; sawFilter.Q.value = 0.5;
-      saw.connect(sawFilter); sawFilter.connect(sawGain); sawGain.connect(this.masterGain);
+      // Alternate chords between left and right for stereo width
+      const chordDest = semitone % 2 === 0 ? this.chordPanL : this.chordPanR;
+      saw.connect(sawFilter); sawFilter.connect(sawGain); sawGain.connect(chordDest);
       sawGain.gain.setValueAtTime(0.06, this.ctx.currentTime);
       sawGain.gain.setValueAtTime(0.05, this.ctx.currentTime + 0.1);
       sawGain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 2.5);
@@ -278,7 +297,7 @@ export class BeatPlayer {
       const sineGain = this.ctx.createGain();
       sine.type = 'sine';
       sine.frequency.value = freq;
-      sine.connect(sineGain); sineGain.connect(this.masterGain);
+      sine.connect(sineGain); sineGain.connect(semitone % 2 === 0 ? this.chordPanR : this.chordPanL);
       sineGain.gain.setValueAtTime(0.04, this.ctx.currentTime);
       sineGain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 2.0);
       sine.start(); sine.stop(this.ctx.currentTime + 2.0);
