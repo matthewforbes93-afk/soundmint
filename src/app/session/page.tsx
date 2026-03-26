@@ -293,10 +293,50 @@ export default function SessionPage() {
       beatPlayerRef.current.start();
     }
 
-    // Play vocals — simple and reliable, no Web Audio chain on playback
-    // (effects are applied during export via server-side processing)
+    // Play vocals through effects chain
     if (vocalAudioRef.current && vocalUrl) {
-      vocalAudioRef.current.volume = vocalVolume / 100;
+      // Create source node ONCE (can't call createMediaElementSource twice)
+      if (!vocalChainRef.current) {
+        try {
+          const ctx = new AudioContext();
+          const source = ctx.createMediaElementSource(vocalAudioRef.current);
+          vocalChainRef.current = { ctx, source };
+        } catch {
+          // Already created — just play direct
+          vocalAudioRef.current.volume = vocalVolume / 100;
+          vocalAudioRef.current.currentTime = 0;
+          vocalAudioRef.current.play().catch(() => {});
+          setIsPlaying(true);
+          return;
+        }
+      }
+
+      const { ctx, source } = vocalChainRef.current;
+      try { source.disconnect(); } catch {/* ok */}
+
+      const preset = VOCAL_PRESETS[vocalPreset] || VOCAL_PRESETS.raw;
+
+      // Build chain: source → EQ → comp → gain → dest
+      const eqL = ctx.createBiquadFilter(); eqL.type = 'lowshelf'; eqL.frequency.value = 300; eqL.gain.value = preset.eq[0];
+      const eqM = ctx.createBiquadFilter(); eqM.type = 'peaking'; eqM.frequency.value = 1500; eqM.Q.value = 1; eqM.gain.value = preset.eq[1];
+      const eqH = ctx.createBiquadFilter(); eqH.type = 'highshelf'; eqH.frequency.value = 4000; eqH.gain.value = preset.eq[2];
+      const comp = ctx.createDynamicsCompressor();
+      comp.threshold.value = -24 + (preset.comp / 100) * 20; comp.ratio.value = 4;
+      const gain = ctx.createGain(); gain.gain.value = vocalVolume / 100;
+
+      source.connect(eqL); eqL.connect(eqM); eqM.connect(eqH); eqH.connect(comp); comp.connect(gain);
+
+      // Reverb
+      if (preset.reverb > 0) {
+        const rG = ctx.createGain(); rG.gain.value = preset.reverb / 150;
+        const d1 = ctx.createDelay(); d1.delayTime.value = 0.02;
+        const d2 = ctx.createDelay(); d2.delayTime.value = 0.04;
+        const fb = ctx.createGain(); fb.gain.value = 0.2;
+        gain.connect(d1); d1.connect(d2); d2.connect(fb); fb.connect(d1);
+        d1.connect(rG); d2.connect(rG); rG.connect(ctx.destination);
+      }
+
+      gain.connect(ctx.destination);
       vocalAudioRef.current.currentTime = 0;
       vocalAudioRef.current.play().catch(() => {});
     }
