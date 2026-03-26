@@ -1,7 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import { Geist } from 'next/font/google';
 import './globals.css';
-import Sidebar from '@/components/Sidebar';
 import { Toaster } from 'react-hot-toast';
 
 const geist = Geist({ subsets: ['latin'] });
@@ -22,19 +21,14 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="dark">
-      <body className={`${geist.className} bg-black text-white antialiased`}>
+      <body className={`${geist.className} bg-[#111] text-white antialiased`}>
         <Toaster
           position="top-center"
           toastOptions={{
-            style: { background: '#111118', color: '#fff', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '12px', fontSize: '13px' },
+            style: { background: '#1a1a1a', color: '#fff', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '12px', fontSize: '13px' },
           }}
         />
-        <div className="flex min-h-screen">
-          <Sidebar />
-          <main className="flex-1 overflow-auto">
-            {children}
-          </main>
-        </div>
+        {children}
       </body>
     </html>
   );
