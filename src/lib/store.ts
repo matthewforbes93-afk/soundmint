@@ -1,54 +1,131 @@
+/**
+ * SoundMint Global Store
+ *
+ * Single source of truth for the entire app.
+ * Project state, transport state, UI state, undo history.
+ */
+
 import { create } from 'zustand';
-import { Track, DashboardStats } from './types';
+import { type SoundMintProject, type ProjectTrack, createProject, createTrack } from './project';
 
 interface SoundMintStore {
-  tracks: Track[];
-  setTracks: (tracks: Track[]) => void;
-  addTrack: (track: Track) => void;
-  updateTrack: (id: string, updates: Partial<Track>) => void;
+  // ─── Project ───
+  project: SoundMintProject | null;
+  setProject: (p: SoundMintProject) => void;
+  newProject: (title: string, artist: string) => void;
+  updateProject: (updates: Partial<SoundMintProject>) => void;
 
-  stats: DashboardStats | null;
-  setStats: (stats: DashboardStats) => void;
+  // ─── Tracks ───
+  addTrack: (name: string, type?: ProjectTrack['type']) => ProjectTrack;
+  updateTrack: (trackId: string, updates: Partial<ProjectTrack>) => void;
+  removeTrack: (trackId: string) => void;
 
-  isGenerating: boolean;
-  setIsGenerating: (v: boolean) => void;
-  generationProgress: string;
-  setGenerationProgress: (msg: string) => void;
-
-  currentTrack: Track | null;
+  // ─── Transport ───
   isPlaying: boolean;
-  setCurrentTrack: (track: Track | null) => void;
+  isRecording: boolean;
+  currentTime: number;
   setIsPlaying: (v: boolean) => void;
+  setIsRecording: (v: boolean) => void;
+  setCurrentTime: (t: number) => void;
 
-  statusFilter: string;
-  genreFilter: string;
-  setStatusFilter: (f: string) => void;
-  setGenreFilter: (f: string) => void;
+  // ─── UI ───
+  selectedTrackId: string | null;
+  setSelectedTrack: (id: string | null) => void;
+
+  // ─── Player (for bottom bar) ───
+  currentTrack: { id: string; title: string; artist_name: string; audio_url: string | null; cover_art_url: string | null } | null;
+  setCurrentTrack: (t: SoundMintStore['currentTrack']) => void;
+
+  // ─── Undo ───
+  undoStack: string[]; // JSON snapshots
+  redoStack: string[];
+  pushUndo: () => void;
+  undo: () => void;
+  redo: () => void;
 }
 
-export const useSoundMintStore = create<SoundMintStore>((set) => ({
-  tracks: [],
-  setTracks: (tracks) => set({ tracks }),
-  addTrack: (track) => set((s) => ({ tracks: [track, ...s.tracks] })),
-  updateTrack: (id, updates) => set((s) => ({
-    tracks: s.tracks.map((t) => (t.id === id ? { ...t, ...updates } : t)),
+export const useSoundMintStore = create<SoundMintStore>((set, get) => ({
+  // ─── Project ───
+  project: null,
+  setProject: (project) => set({ project }),
+  newProject: (title, artist) => set({ project: createProject(title, artist) }),
+  updateProject: (updates) => set(s => ({
+    project: s.project ? { ...s.project, ...updates, updatedAt: new Date().toISOString() } : null,
   })),
 
-  stats: null,
-  setStats: (stats) => set({ stats }),
+  // ─── Tracks ───
+  addTrack: (name, type = 'audio') => {
+    const state = get();
+    const track = createTrack(name, type, state.project?.tracks.length || 0);
+    set(s => ({
+      project: s.project ? {
+        ...s.project,
+        tracks: [...s.project.tracks, track],
+        updatedAt: new Date().toISOString(),
+      } : null,
+    }));
+    return track;
+  },
+  updateTrack: (trackId, updates) => set(s => ({
+    project: s.project ? {
+      ...s.project,
+      tracks: s.project.tracks.map(t => t.id === trackId ? { ...t, ...updates } : t),
+      updatedAt: new Date().toISOString(),
+    } : null,
+  })),
+  removeTrack: (trackId) => set(s => ({
+    project: s.project ? {
+      ...s.project,
+      tracks: s.project.tracks.filter(t => t.id !== trackId),
+      updatedAt: new Date().toISOString(),
+    } : null,
+  })),
 
-  isGenerating: false,
-  setIsGenerating: (isGenerating) => set({ isGenerating }),
-  generationProgress: '',
-  setGenerationProgress: (generationProgress) => set({ generationProgress }),
-
-  currentTrack: null,
+  // ─── Transport ───
   isPlaying: false,
-  setCurrentTrack: (currentTrack) => set({ currentTrack, isPlaying: false }),
+  isRecording: false,
+  currentTime: 0,
   setIsPlaying: (isPlaying) => set({ isPlaying }),
+  setIsRecording: (isRecording) => set({ isRecording }),
+  setCurrentTime: (currentTime) => set({ currentTime }),
 
-  statusFilter: 'all',
-  genreFilter: 'all',
-  setStatusFilter: (statusFilter) => set({ statusFilter }),
-  setGenreFilter: (genreFilter) => set({ genreFilter }),
+  // ─── UI ───
+  selectedTrackId: null,
+  setSelectedTrack: (selectedTrackId) => set({ selectedTrackId }),
+
+  // ─── Player ───
+  currentTrack: null,
+  setCurrentTrack: (currentTrack) => set({ currentTrack }),
+
+  // ─── Undo ───
+  undoStack: [],
+  redoStack: [],
+  pushUndo: () => {
+    const { project, undoStack } = get();
+    if (!project) return;
+    const snap = JSON.stringify(project);
+    const stack = [...undoStack, snap];
+    if (stack.length > 30) stack.shift();
+    set({ undoStack: stack, redoStack: [] });
+  },
+  undo: () => {
+    const { project, undoStack, redoStack } = get();
+    if (undoStack.length === 0 || !project) return;
+    const prev = undoStack[undoStack.length - 1];
+    set({
+      project: JSON.parse(prev),
+      undoStack: undoStack.slice(0, -1),
+      redoStack: [...redoStack, JSON.stringify(project)],
+    });
+  },
+  redo: () => {
+    const { project, undoStack, redoStack } = get();
+    if (redoStack.length === 0 || !project) return;
+    const next = redoStack[redoStack.length - 1];
+    set({
+      project: JSON.parse(next),
+      undoStack: [...undoStack, JSON.stringify(project)],
+      redoStack: redoStack.slice(0, -1),
+    });
+  },
 }));

@@ -5,7 +5,8 @@ import { useSoundMintStore } from '@/lib/store';
 import { Play, Pause, SkipBack, SkipForward, Volume2, Music } from 'lucide-react';
 
 export default function Player() {
-  const { currentTrack, isPlaying, setIsPlaying, tracks, setCurrentTrack } = useSoundMintStore();
+  const { currentTrack, isPlaying, setIsPlaying, setCurrentTrack, project } = useSoundMintStore();
+  const tracks = project?.tracks || [];
   const audioRef = useRef<HTMLAudioElement>(null);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -43,7 +44,7 @@ export default function Player() {
 
   function skipTrack(direction: 'prev' | 'next') {
     if (!currentTrack || tracks.length === 0) return;
-    const playable = tracks.filter(t => t.audio_url);
+    const playable = tracks.filter(t => t.audioUrl);
     if (playable.length === 0) return;
     const idx = playable.findIndex(t => t.id === currentTrack.id);
     let newIdx: number;
@@ -52,7 +53,8 @@ export default function Player() {
     } else {
       newIdx = idx <= 0 ? playable.length - 1 : idx - 1;
     }
-    setCurrentTrack(playable[newIdx]);
+    const next = playable[newIdx];
+    setCurrentTrack({ id: next.id, title: next.name, artist_name: project?.artist || '', audio_url: next.audioUrl, cover_art_url: null });
     setIsPlaying(true);
   }
 
