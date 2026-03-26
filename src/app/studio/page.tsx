@@ -11,12 +11,12 @@ import Synth from '@/components/Synth';
 import DrumMachine from '@/components/DrumMachine';
 import PianoRoll from '@/components/PianoRoll';
 import ArrangementMarkers from '@/components/ArrangementMarkers';
-import AutomationLane from '@/components/AutomationLane';
+// AutomationLane removed — will rebuild on proper foundation
 import ChordGenerator from '@/components/ChordGenerator';
 import BassSynth from '@/components/BassSynth';
-import AnalysisPanel from '@/components/AnalysisPanel';
+// AnalysisPanel removed — will rebuild
 import ExportDialog from '@/components/ExportDialog';
-import { useMetronome } from '@/lib/useMetronome';
+// useMetronome inlined below
 import { useKeyboardShortcuts } from '@/lib/useKeyboardShortcuts';
 
 // ─── WAV Encoder ───
@@ -249,7 +249,27 @@ export default function StudioPage() {
     compressor: DynamicsCompressorNode;
     reverb: GainNode; // dry/wet mix for reverb send
   }>>({});
-  const metronome = useMetronome();
+  // Inline metronome
+  const metronomeIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const metronome = {
+    start: (bpmVal: number) => {
+      metronome.stop();
+      const click = () => {
+        const ctx = audioCtxRef.current || new AudioContext();
+        audioCtxRef.current = ctx;
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.connect(g); g.connect(ctx.destination);
+        osc.frequency.value = 1000;
+        g.gain.setValueAtTime(0.3, ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.05);
+        osc.start(); osc.stop(ctx.currentTime + 0.05);
+      };
+      click();
+      metronomeIntervalRef.current = setInterval(click, (60 / bpmVal) * 1000);
+    },
+    stop: () => { if (metronomeIntervalRef.current) { clearInterval(metronomeIntervalRef.current); metronomeIntervalRef.current = null; } },
+  };
 
   // Keyboard shortcuts
   useKeyboardShortcuts({
@@ -771,17 +791,7 @@ export default function StudioPage() {
                 </button>
               </div>
 
-              {/* Automation Lane */}
-              {track.showAutomation && (
-                <AutomationLane
-                  label={`${track.name} → ${track.automationParam}`}
-                  color={track.color}
-                  points={track.automationPoints}
-                  totalBars={totalBars}
-                  pxPerBar={pxPerBar}
-                  onChange={(points) => upd(track.id, { automationPoints: points })}
-                />
-              )}
+              {/* Automation — will rebuild on proper foundation */}
             </React.Fragment>
           ))}
 
@@ -923,10 +933,7 @@ export default function StudioPage() {
                 </div>
               );
             })() : (
-              <div className="h-full flex items-center gap-4 px-4">
-                <span className="text-gray-700 text-sm">Select a track to edit effects</span>
-                <AnalysisPanel audioUrl={tracks.find(t => t.audioUrl)?.audioUrl || null} />
-              </div>
+              <div className="h-full flex items-center justify-center text-gray-700 text-sm">Select a track to edit effects</div>
             )}
           </div>
         )}

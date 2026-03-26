@@ -3,22 +3,22 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  LayoutDashboard, Sliders, Wand2, Library,
-  Upload, FolderOpen, Settings, Music2, Mic, Radio,
-  Users, ShoppingBag, Disc3
+  LayoutDashboard, Sliders, Disc3, Library,
+  Upload, ShoppingBag, Settings, Music2, Radio
 } from 'lucide-react';
 
+// 6 core navigation items — focused, not overwhelming
 const navItems = [
   { href: '/', label: 'Home', icon: LayoutDashboard },
-  { href: '/session', label: 'New Session', icon: Disc3 },
+  { href: '/session', label: 'Create', icon: Disc3 },
   { href: '/studio', label: 'Studio', icon: Sliders },
-  { href: '/playground', label: 'AI Playground', icon: Wand2 },
-  { href: '/recorder', label: 'Recorder', icon: Mic },
-  { href: '/library', label: 'Sound Library', icon: Library },
-  { href: '/projects', label: 'Projects', icon: FolderOpen },
+  { href: '/library', label: 'Library', icon: Library },
   { href: '/distribute', label: 'Distribute', icon: Upload },
-  { href: '/collaborate', label: 'Collaborate', icon: Users },
   { href: '/marketplace', label: 'Marketplace', icon: ShoppingBag },
+];
+
+// Settings at the bottom, separate from main nav
+const bottomItems = [
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 
@@ -59,14 +59,17 @@ export default function Sidebar() {
         })}
       </nav>
 
-      <div className="p-4 border-t border-gray-800">
-        <div className="bg-gradient-to-r from-teal-900/30 to-emerald-900/30 rounded-lg p-4 border border-teal-800/30">
-          <div className="flex items-center gap-2 mb-1">
-            <Radio className="w-4 h-4 text-teal-400" />
-            <p className="text-xs text-teal-300 font-medium">Local Server</p>
-          </div>
-          <p className="text-xs text-gray-500">MusicGen + Demucs on GPU</p>
-        </div>
+      {/* Bottom nav */}
+      <div className="p-4 border-t border-gray-800 space-y-1">
+        {bottomItems.map(({ href, label, icon: Icon }) => {
+          const isActive = pathname === href;
+          return (
+            <Link key={href} href={href}
+              className={`flex items-center gap-3 px-4 py-2 rounded-lg text-sm ${isActive ? 'text-teal-400' : 'text-gray-600 hover:text-gray-300'}`}>
+              <Icon className="w-4 h-4" /> {label}
+            </Link>
+          );
+        })}
       </div>
     </aside>
   );
