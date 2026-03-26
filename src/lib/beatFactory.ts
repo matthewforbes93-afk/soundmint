@@ -390,3 +390,4 @@ export class BeatPlayer {
     return this.ctx;
   }
 }
+

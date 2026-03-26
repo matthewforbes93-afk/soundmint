@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { BeatPlayer, type BeatConfig } from '@/lib/beatFactory';
+import LevelMeter from '@/components/LevelMeter';
 
 // ─── Types ───
 type Door = null | 'write' | 'record' | 'build';
@@ -638,8 +639,13 @@ export default function SessionPage() {
             </div>
           )}
 
-          {/* Circular visualizer */}
-          <div className="relative w-64 h-64 mx-auto mb-8">
+          {/* Circular visualizer + Level Meter */}
+          <div className="flex items-center justify-center gap-4 mb-8">
+          {/* VU Meter - left side */}
+          <div className={`transition-opacity ${isRecording ? 'opacity-100' : 'opacity-30'}`}>
+            <LevelMeter analyser={analyserRef.current} height={200} width={20} showDB={true} />
+          </div>
+          <div className="relative w-64 h-64">
             {/* Outer ring */}
             <svg viewBox="0 0 200 200" className="w-full h-full">
               {vizData.map((v, i) => {
@@ -682,6 +688,11 @@ export default function SessionPage() {
               )}
             </div>
           </div>
+          {/* VU Meter - right side */}
+          <div className={`transition-opacity ${isRecording ? 'opacity-100' : 'opacity-30'}`}>
+            <LevelMeter analyser={analyserRef.current} height={200} width={20} showDB={true} />
+          </div>
+          </div>{/* close flex wrapper */}
 
           {/* Controls */}
           <div className="flex items-center justify-center gap-4 mb-8">
