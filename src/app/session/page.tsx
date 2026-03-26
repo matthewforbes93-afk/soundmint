@@ -372,6 +372,18 @@ export default function SessionPage() {
 
   function formatTime(s: number) { return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`; }
 
+  async function saveSession() {
+    try {
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ artistName, songTitle, genre, mood, bpm, beatUrl, vocalUrl, vocalPreset, autotunePreset, beatVolume, vocalVolume, lyrics, door }),
+      });
+      if (res.ok) toast.success('Session saved');
+      else toast.error('Save failed');
+    } catch { toast.error('Save failed'); }
+  }
+
   function reset() {
     stopAll();
     setDoor(null); setPhase('doors'); setVocalUrl(null); setExportUrl(null);
@@ -421,6 +433,12 @@ export default function SessionPage() {
           </div>
 
           <div className="flex items-center gap-2">
+            {songTitle && phase !== 'setup' && (
+              <button onClick={saveSession}
+                className="text-xs px-3 py-1 bg-white/5 hover:bg-white/10 rounded-lg text-gray-400 border border-white/10">
+                Save
+              </button>
+            )}
             {vocalUrl && phase !== 'done' && (
               <button onClick={exportSong} disabled={exporting}
                 className="text-xs px-3 py-1 bg-teal-600 hover:bg-teal-700 rounded-lg text-white flex items-center gap-1">
