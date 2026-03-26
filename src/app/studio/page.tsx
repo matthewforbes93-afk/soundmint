@@ -11,62 +11,19 @@ import Synth from '@/components/Synth';
 import DrumMachine from '@/components/DrumMachine';
 import PianoRoll from '@/components/PianoRoll';
 import ArrangementMarkers from '@/components/ArrangementMarkers';
-// AutomationLane removed — will rebuild on proper foundation
 import ChordGenerator from '@/components/ChordGenerator';
 import BassSynth from '@/components/BassSynth';
-// AnalysisPanel removed — will rebuild
 import ExportDialog from '@/components/ExportDialog';
-// useMetronome inlined below
+import Tabs from '@/components/ui/Tabs';
 import { useKeyboardShortcuts } from '@/lib/useKeyboardShortcuts';
+import { getAudioEngine, disposeAudioEngine } from '@/lib/audio-engine';
+import { useSoundMintStore } from '@/lib/store';
+import type { ProjectTrack } from '@/lib/project';
 
-// ─── WAV Encoder ───
-function audioBufferToWav(buffer: AudioBuffer): ArrayBuffer {
-  const numChannels = buffer.numberOfChannels;
-  const sampleRate = buffer.sampleRate;
-  const length = buffer.length * numChannels * 2 + 44;
-  const out = new ArrayBuffer(length);
-  const view = new DataView(out);
-  const writeStr = (offset: number, str: string) => { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)); };
-  writeStr(0, 'RIFF'); view.setUint32(4, length - 8, true); writeStr(8, 'WAVE');
-  writeStr(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
-  view.setUint16(22, numChannels, true); view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * numChannels * 2, true); view.setUint16(32, numChannels * 2, true);
-  view.setUint16(34, 16, true); writeStr(36, 'data'); view.setUint32(40, length - 44, true);
-  let offset = 44;
-  for (let i = 0; i < buffer.length; i++) {
-    for (let ch = 0; ch < numChannels; ch++) {
-      const sample = Math.max(-1, Math.min(1, buffer.getChannelData(ch)[i]));
-      view.setInt16(offset, sample * 0x7FFF, true);
-      offset += 2;
-    }
-  }
-  return out;
-}
-
-// ─── Types ───
-interface TrackLane {
-  id: string;
-  name: string;
-  color: string;
-  type: 'audio' | 'midi' | 'ai';
-  volume: number;
-  pan: number;
-  mute: boolean;
-  solo: boolean;
-  armed: boolean;
-  audioUrl: string | null;
-  waveform: number[];
-  effects: { eq: [number, number, number]; comp: number; reverb: number; delay: number; chorus: number };
-  showAutomation: boolean;
-  automationParam: 'volume' | 'pan' | 'reverb';
-  automationPoints: { bar: number; value: number }[];
-}
-
-// SoundMint palette — mint, teal, emerald, purple accents
+// ─── Constants ───
 const COLORS = ['#34d399','#2dd4bf','#a78bfa','#22d3ee','#4ade80','#818cf8','#67e8f9','#6ee7b7','#c084fc','#5eead4'];
 
 function wave(n: number = 300): number[] {
-  // Seeded pseudo-random for SSR/client consistency
   let seed = n * 7 + 13;
   const rand = () => { seed = (seed * 16807 + 0) % 2147483647; return (seed & 0x7fffffff) / 2147483647; };
   const w: number[] = [];
@@ -75,19 +32,6 @@ function wave(n: number = 300): number[] {
     w.push(base + (rand() - 0.5) * 0.4);
   }
   return w;
-}
-
-function mkTrack(name: string, i: number, type: TrackLane['type'] = 'audio', hasWave = false): TrackLane {
-  return {
-    id: `t-${i}-${name.replace(/\s/g, '')}`,
-    name, color: COLORS[i % COLORS.length], type,
-    volume: 80, pan: 0, mute: false, solo: false, armed: false,
-    audioUrl: null, waveform: hasWave ? wave() : [],
-    effects: { eq: [0, 0, 0], comp: 0, reverb: 0, delay: 0, chorus: 0 },
-    showAutomation: false,
-    automationParam: 'volume',
-    automationPoints: [],
-  };
 }
 
 // ─── Level Meter Component ───
@@ -146,14 +90,14 @@ function Knob({ value, onChange, label, color = 'purple', min = 0, max = 100 }: 
 
 // ─── Channel Strip Component ───
 function ChannelStrip({ track, meters, onUpdate, selected, onSelect }: {
-  track: TrackLane; meters: [number, number]; onUpdate: (u: Partial<TrackLane>) => void; selected: boolean; onSelect: () => void;
+  track: ProjectTrack & { armed?: boolean; waveform?: number[] }; meters: [number, number];
+  onUpdate: (u: Partial<ProjectTrack>) => void; selected: boolean; onSelect: () => void;
 }) {
   return (
     <div onClick={onSelect}
       className={`w-[72px] flex-shrink-0 flex flex-col items-center rounded-xl border transition-all cursor-pointer ${
         selected ? 'bg-white/[0.04] border-purple-500/30 shadow-lg shadow-purple-500/5' : 'bg-white/[0.02] border-white/5 hover:border-white/10'
       }`}>
-      {/* Track name */}
       <div className="w-full px-2 pt-2 pb-1">
         <div className="flex items-center gap-1 mb-1">
           <div className="w-2 h-2 rounded-full" style={{ background: track.color }} />
@@ -162,10 +106,8 @@ function ChannelStrip({ track, meters, onUpdate, selected, onSelect }: {
         <span className="text-[8px] text-gray-600">{track.type.toUpperCase()}</span>
       </div>
 
-      {/* Pan knob */}
       <Knob value={track.pan} onChange={(v) => onUpdate({ pan: v })} label="Pan" min={-100} max={100} color="cyan" />
 
-      {/* Fader + Meters */}
       <div className="flex items-end gap-1 px-1 py-2 flex-1">
         <Meter value={meters[0]} />
         <div className="flex flex-col items-center">
@@ -179,22 +121,44 @@ function ChannelStrip({ track, meters, onUpdate, selected, onSelect }: {
         <Meter value={meters[1]} />
       </div>
 
-      {/* M / S / R buttons */}
       <div className="flex gap-0.5 pb-2">
         <button onClick={(e) => { e.stopPropagation(); onUpdate({ mute: !track.mute }); }}
           className={`text-[8px] w-5 h-5 rounded font-bold flex items-center justify-center ${track.mute ? 'bg-red-500/40 text-red-300' : 'bg-white/5 text-gray-600 hover:text-gray-300'}`}>M</button>
         <button onClick={(e) => { e.stopPropagation(); onUpdate({ solo: !track.solo }); }}
           className={`text-[8px] w-5 h-5 rounded font-bold flex items-center justify-center ${track.solo ? 'bg-yellow-500/40 text-yellow-300' : 'bg-white/5 text-gray-600 hover:text-gray-300'}`}>S</button>
-        <button onClick={(e) => { e.stopPropagation(); onUpdate({ armed: !track.armed }); }}
-          className={`text-[8px] w-5 h-5 rounded font-bold flex items-center justify-center ${track.armed ? 'bg-red-600 text-white' : 'bg-white/5 text-gray-600 hover:text-gray-300'}`}>R</button>
       </div>
     </div>
   );
 }
 
+// ─── Extended track type (UI-only fields beyond ProjectTrack) ───
+interface StudioTrack extends ProjectTrack {
+  armed: boolean;
+  waveform: number[];
+  showAutomation: boolean;
+  automationParam: 'volume' | 'pan' | 'reverb';
+  automationPoints: { bar: number; value: number }[];
+}
+
+function projectToStudio(t: ProjectTrack, index: number): StudioTrack {
+  return {
+    ...t,
+    color: t.color || COLORS[index % COLORS.length],
+    armed: false,
+    waveform: t.audioUrl ? wave() : [],
+    showAutomation: false,
+    automationParam: 'volume',
+    automationPoints: [],
+  };
+}
+
 // ═══ MAIN STUDIO PAGE ═══
 export default function StudioPage() {
-  const [tracks, setTracks] = useState<TrackLane[]>([]);
+  const store = useSoundMintStore();
+  const engine = useRef(getAudioEngine());
+
+  // Local UI state
+  const [tracks, setTracks] = useState<StudioTrack[]>([]);
   const [initialized, setInitialized] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -202,370 +166,268 @@ export default function StudioPage() {
   const [key, setKey] = useState('C');
   const [timeSig, setTimeSig] = useState('4/4');
   const [looping, setLooping] = useState(false);
-  const [pos, setPos] = useState(0); // seconds
+  const [pos, setPos] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
-  const [bottomTab, setBottomTab] = useState<'mixer' | 'fx' | 'browser' | 'synth' | 'drums' | 'piano' | 'chords' | 'bass'>('mixer');
+  const [bottomTab, setBottomTab] = useState('mixer');
   const [zoom, setZoom] = useState(1);
   const [meters, setMeters] = useState<Record<string, [number, number]>>({});
-  const animRef = useRef(0);
-  const startRef = useRef(0);
   const [metronomeOn, setMetronomeOn] = useState(false);
   const [showExport, setShowExport] = useState(false);
-  const trackHistoryRef = useRef<TrackLane[][]>([]);
-  const trackHistoryIdxRef = useRef(-1);
-
-  function pushHistory(newTracks: TrackLane[]) {
-    trackHistoryRef.current = trackHistoryRef.current.slice(0, trackHistoryIdxRef.current + 1);
-    trackHistoryRef.current.push(JSON.parse(JSON.stringify(newTracks)));
-    if (trackHistoryRef.current.length > 30) trackHistoryRef.current.shift();
-    else trackHistoryIdxRef.current++;
-  }
-
-  function undo() {
-    if (trackHistoryIdxRef.current > 0) {
-      trackHistoryIdxRef.current--;
-      setTracks(JSON.parse(JSON.stringify(trackHistoryRef.current[trackHistoryIdxRef.current])));
-    }
-  }
-
-  function redo() {
-    if (trackHistoryIdxRef.current < trackHistoryRef.current.length - 1) {
-      trackHistoryIdxRef.current++;
-      setTracks(JSON.parse(JSON.stringify(trackHistoryRef.current[trackHistoryIdxRef.current])));
-    }
-  }
   const [sections, setSections] = useState<{ id: string; name: string; startBar: number; color: string }[]>([]);
   const [recordingTrackId, setRecordingTrackId] = useState<string | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const audioSourcesRef = useRef<Record<string, {
-    source: AudioBufferSourceNode | null;
-    gain: GainNode;
-    pan: StereoPannerNode;
-    eqLow: BiquadFilterNode;
-    eqMid: BiquadFilterNode;
-    eqHigh: BiquadFilterNode;
-    compressor: DynamicsCompressorNode;
-    reverb: GainNode; // dry/wet mix for reverb send
-  }>>({});
-  // Inline metronome
-  const metronomeIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const metronome = {
-    start: (bpmVal: number) => {
-      metronome.stop();
-      const click = () => {
-        const ctx = audioCtxRef.current || new AudioContext();
-        audioCtxRef.current = ctx;
-        const osc = ctx.createOscillator();
-        const g = ctx.createGain();
-        osc.connect(g); g.connect(ctx.destination);
-        osc.frequency.value = 1000;
-        g.gain.setValueAtTime(0.3, ctx.currentTime);
-        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.05);
-        osc.start(); osc.stop(ctx.currentTime + 0.05);
-      };
-      click();
-      metronomeIntervalRef.current = setInterval(click, (60 / bpmVal) * 1000);
-    },
-    stop: () => { if (metronomeIntervalRef.current) { clearInterval(metronomeIntervalRef.current); metronomeIntervalRef.current = null; } },
-  };
 
-  // Keyboard shortcuts
+  const animRef = useRef(0);
+  const startRef = useRef(0);
+  const metronomeIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // ─── Sync tracks to store ───
+  const syncToStore = useCallback((updated: StudioTrack[]) => {
+    // Push project tracks to the store (strip UI-only fields)
+    updated.forEach(t => {
+      const existing = store.project?.tracks.find(pt => pt.id === t.id);
+      if (existing) {
+        store.updateTrack(t.id, {
+          name: t.name, volume: t.volume, pan: t.pan,
+          mute: t.mute, solo: t.solo, audioUrl: t.audioUrl,
+          effects: t.effects,
+        });
+      }
+    });
+  }, [store]);
+
+  // ─── Track update helper ───
+  function upd(id: string, u: Partial<StudioTrack>) {
+    setTracks(prev => {
+      const next = prev.map(t => t.id === id ? { ...t, ...u } : t);
+      // Push engine params in real-time
+      const eng = engine.current;
+      if (u.volume !== undefined) eng.setTrackParam(id, 'volume', u.volume);
+      if (u.pan !== undefined) eng.setTrackParam(id, 'pan', u.pan);
+      if (u.mute !== undefined) eng.setTrackParam(id, 'mute', u.mute);
+      if (u.effects) {
+        const fx = u.effects;
+        eng.setTrackParam(id, 'eqLow', fx.eqLow);
+        eng.setTrackParam(id, 'eqMid', fx.eqMid);
+        eng.setTrackParam(id, 'eqHigh', fx.eqHigh);
+        eng.setTrackParam(id, 'compThreshold', fx.compThreshold);
+        eng.setTrackParam(id, 'compRatio', fx.compRatio);
+        eng.setTrackParam(id, 'reverbSend', fx.reverbSend);
+      }
+      // Undo + store sync
+      store.pushUndo();
+      syncToStore(next);
+      return next;
+    });
+  }
+
+  function addTrack(type: ProjectTrack['type']) {
+    const n = tracks.length;
+    const names: Record<string, string> = { audio: `Audio ${n+1}`, midi: `MIDI ${n+1}`, instrument: `AI ${n+1}` };
+    const pt = store.addTrack(names[type] || `Track ${n+1}`, type);
+    const st = projectToStudio(pt, n);
+    engine.current.createTrack(st.id, {
+      volume: st.volume, pan: st.pan, mute: st.mute, solo: st.solo,
+      eqLow: st.effects.eqLow, eqMid: st.effects.eqMid, eqHigh: st.effects.eqHigh,
+      compThreshold: st.effects.compThreshold, compRatio: st.effects.compRatio,
+      reverbSend: st.effects.reverbSend,
+    });
+    setTracks(prev => [...prev, st]);
+  }
+
+  // ─── Metronome (via engine click) ───
+  const startMetronome = useCallback((bpmVal: number) => {
+    stopMetronome();
+    const eng = engine.current;
+    eng.playClick(true);
+    metronomeIntervalRef.current = setInterval(() => eng.playClick(), (60 / bpmVal) * 1000);
+  }, []);
+
+  const stopMetronome = useCallback(() => {
+    if (metronomeIntervalRef.current) { clearInterval(metronomeIntervalRef.current); metronomeIntervalRef.current = null; }
+  }, []);
+
+  // ─── Keyboard shortcuts ───
   useKeyboardShortcuts({
     ' ': () => { setPlaying(p => !p); setRecording(false); },
     'r': () => { if (recording) stopStudioRecording(); else startStudioRecording(); },
     'm': () => setMetronomeOn(m => !m),
-    'cmd+z': undo,
-    'cmd+shift+z': redo,
+    'cmd+z': () => store.undo(),
+    'cmd+shift+z': () => store.redo(),
   });
 
-  // Metronome
+  // ─── Metronome effect ───
   useEffect(() => {
-    if (playing && metronomeOn) {
-      metronome.start(bpm);
-    } else {
-      metronome.stop();
-    }
-    return () => metronome.stop();
-  }, [playing, metronomeOn, bpm, metronome]);
+    if (playing && metronomeOn) startMetronome(bpm);
+    else stopMetronome();
+    return () => stopMetronome();
+  }, [playing, metronomeOn, bpm, startMetronome, stopMetronome]);
 
-  // In-studio recording
+  // ─── Recording ───
   async function startStudioRecording() {
-    // Find armed track, or auto-arm the selected/first track
     let armedTrack = tracks.find(t => t.armed);
     if (!armedTrack) {
       const targetId = selected || tracks[0]?.id;
       if (!targetId) return;
-      // Arm it directly in our local reference
       armedTrack = tracks.find(t => t.id === targetId);
       if (!armedTrack) return;
       armedTrack = { ...armedTrack, armed: true };
       setTracks(prev => prev.map(t => ({ ...t, armed: t.id === targetId })));
     }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = recorder;
-      chunksRef.current = [];
 
-      // Live input monitoring — connect mic to analyser for visual feedback
-      const audioCtx = audioCtxRef.current || new AudioContext();
-      audioCtxRef.current = audioCtx;
-      const source = audioCtx.createMediaStreamSource(stream);
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 256;
-      source.connect(analyser);
-      // Store analyser for level metering
-      (window as unknown as Record<string, unknown>).__recAnalyser = analyser;
+    const eng = engine.current;
 
-      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-      recorder.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop());
-        (window as unknown as Record<string, unknown>).__recAnalyser = null;
-        const webmBlob = new Blob(chunksRef.current, { type: 'audio/webm' });
-        if (webmBlob.size < 1000) return; // Too short, discard
-
-        // Convert WebM to WAV so Web Audio can decode it later
-        let file: File;
-        try {
-          const convCtx = new AudioContext();
-          const arrayBuf = await webmBlob.arrayBuffer();
-          const audioBuf = await convCtx.decodeAudioData(arrayBuf);
-          const wavBuf = audioBufferToWav(audioBuf);
-          const wavBlob = new Blob([wavBuf], { type: 'audio/wav' });
-          file = new File([wavBlob], `studio-rec-${Date.now()}.wav`, { type: 'audio/wav' });
-          convCtx.close();
-        } catch {
-          // Fallback: upload as webm anyway
-          file = new File([webmBlob], `studio-rec-${Date.now()}.webm`, { type: 'audio/webm' });
-        }
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('title', armedTrack.name);
-        try {
-          const res = await fetch('/api/upload', { method: 'POST', body: formData });
-          const data = await res.json();
-          if (res.ok && data.audio_url) {
-            setTracks(prev => prev.map(t =>
-              t.id === armedTrack.id ? { ...t, audioUrl: data.audio_url, waveform: wave(), armed: false } : t
-            ));
-          }
-        } catch (err) { console.error('Upload failed:', err); }
-      };
-      // Count-in: 4 clicks before recording starts
-      setMetronomeOn(true);
-      const ctx = audioCtxRef.current || new AudioContext();
-      audioCtxRef.current = ctx;
-      let countIn = 4;
-      const countInterval = setInterval(() => {
-        // Click sound for count-in
-        const osc = ctx.createOscillator();
-        const g = ctx.createGain();
-        osc.connect(g); g.connect(ctx.destination);
-        osc.frequency.value = countIn === 4 ? 1200 : 900;
-        g.gain.setValueAtTime(0.6, ctx.currentTime);
-        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.05);
-        osc.start(); osc.stop(ctx.currentTime + 0.05);
-
-        countIn--;
-        if (countIn <= 0) {
-          clearInterval(countInterval);
-          recorder.start(100);
-          setRecordingTrackId(armedTrack.id);
-          setRecording(true);
-          setPlaying(true);
-        }
-      }, (60 / bpm) * 1000);
-    } catch (err) {
-      console.error('Mic access denied:', err);
-      // Show visual feedback
-      setRecording(false);
-    }
+    // Count-in: 4 clicks
+    setMetronomeOn(true);
+    let countIn = 4;
+    const countInterval = setInterval(() => {
+      eng.playClick(countIn === 4);
+      countIn--;
+      if (countIn <= 0) {
+        clearInterval(countInterval);
+        doRecord(armedTrack!);
+      }
+    }, (60 / bpm) * 1000);
   }
 
-  function stopStudioRecording() {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
+  async function doRecord(armedTrack: StudioTrack) {
+    const eng = engine.current;
+    const ok = await eng.startRecording();
+    if (!ok) { setRecording(false); return; }
+
+    setRecordingTrackId(armedTrack.id);
+    setRecording(true);
+    setPlaying(true);
+  }
+
+  async function stopStudioRecording() {
+    const eng = engine.current;
+    const audioBuf = await eng.stopRecording();
+    if (audioBuf && recordingTrackId) {
+      // Encode to WAV and upload
+      const wavBuf = eng.encodeWav(audioBuf);
+      const wavBlob = new Blob([wavBuf], { type: 'audio/wav' });
+      const file = new File([wavBlob], `studio-rec-${Date.now()}.wav`, { type: 'audio/wav' });
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('title', tracks.find(t => t.id === recordingTrackId)?.name || 'Recording');
+      try {
+        const res = await fetch('/api/upload', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (res.ok && data.audio_url) {
+          await eng.loadAudio(recordingTrackId, data.audio_url);
+          upd(recordingTrackId, { audioUrl: data.audio_url, waveform: wave(), armed: false });
+        }
+      } catch (err) { console.error('Upload failed:', err); }
     }
     setRecordingTrackId(null);
     setRecording(false);
     setPlaying(false);
     setPos(0);
-    // After a short delay, tracks will have updated audioUrl from the onstop handler
-    // The user can immediately hit play to hear their recording
   }
 
-  // Load real tracks from API + add empty tracks for new recordings
+  // ─── Load tracks on mount ───
   useEffect(() => {
-    if (!initialized) {
-      setInitialized(true);
-      // Fetch real tracks with audio
-      fetch('/api/tracks').then(r => r.json()).then((apiTracks: Array<{id: string; title: string; audio_url: string | null; genre: string}>) => {
-        const realTracks: TrackLane[] = [];
-        const playable = (apiTracks || []).filter(t => t.audio_url);
+    if (initialized) return;
+    setInitialized(true);
 
-        // Add real tracks from library
-        playable.slice(0, 4).forEach((t, i) => {
-          const track = mkTrack(t.title, i, 'audio', true);
-          track.id = t.id;
-          track.audioUrl = t.audio_url;
-          realTracks.push(track);
+    const eng = engine.current;
+
+    // If store has a project, load from there
+    if (store.project && store.project.tracks.length > 0) {
+      const studioTracks = store.project.tracks.map((t, i) => projectToStudio(t, i));
+      studioTracks.forEach(t => {
+        eng.createTrack(t.id, {
+          volume: t.volume, pan: t.pan, mute: t.mute, solo: t.solo,
+          eqLow: t.effects.eqLow, eqMid: t.effects.eqMid, eqHigh: t.effects.eqHigh,
+          compThreshold: t.effects.compThreshold, compRatio: t.effects.compRatio,
+          reverbSend: t.effects.reverbSend,
         });
-
-        // Add empty tracks for recording
-        if (realTracks.length < 2) {
-          realTracks.push(mkTrack('Audio 1', realTracks.length, 'audio', false));
-        }
-        realTracks.push(mkTrack('Record Here', realTracks.length, 'audio', false));
-
-        setTracks(realTracks);
-      }).catch(() => {
-        // Fallback if API fails
-        setTracks([
-          mkTrack('Audio 1', 0, 'audio', false),
-          mkTrack('Record Here', 1, 'audio', false),
-        ]);
+        if (t.audioUrl) eng.loadAudio(t.id, t.audioUrl);
       });
+      setBpm(store.project.bpm);
+      setKey(store.project.key);
+      setTimeSig(store.project.timeSignature);
+      setTracks(studioTracks);
+      return;
     }
-  }, [initialized]);
 
-  // Update ALL audio nodes in real-time when track settings change
-  useEffect(() => {
-    tracks.forEach(track => {
-      const nodes = audioSourcesRef.current[track.id];
-      if (!nodes) return;
+    // Otherwise create a new project and fetch tracks from API
+    if (!store.project) store.newProject('Untitled', 'Artist');
 
-      // Volume + mute
-      nodes.gain.gain.value = track.mute ? 0 : track.volume / 100;
+    fetch('/api/tracks').then(r => r.json()).then((apiTracks: Array<{id: string; title: string; audio_url: string | null; genre: string}>) => {
+      const playable = (apiTracks || []).filter(t => t.audio_url);
+      const studioTracks: StudioTrack[] = [];
 
-      // Pan
-      nodes.pan.pan.value = track.pan / 100;
-
-      // EQ (real-time)
-      nodes.eqLow.gain.value = track.effects.eq[0];
-      nodes.eqMid.gain.value = track.effects.eq[1];
-      nodes.eqHigh.gain.value = track.effects.eq[2];
-
-      // Compressor threshold (real-time)
-      nodes.compressor.threshold.value = -24 + (track.effects.comp / 100) * 24;
-
-      // Reverb send level (real-time)
-      nodes.reverb.gain.value = track.effects.reverb / 100;
-    });
-  }, [tracks]);
-
-  // REAL AUDIO PLAYBACK + animate playhead + meters
-  useEffect(() => {
-    if (playing) {
-      // Create AudioContext if needed
-      if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
-      const ctx = audioCtxRef.current;
-
-      // Start playing all tracks with audio
-      tracks.forEach(async (track) => {
-        if (!track.audioUrl || track.mute) return;
-        if (audioSourcesRef.current[track.id]?.source) return; // Already playing
-        // Skip webm files — Web Audio can't decode them reliably
-        if (track.audioUrl.endsWith('.webm')) return;
-
-        try {
-          const res = await fetch(track.audioUrl);
-          if (!res.ok) return;
-          const arrayBuf = await res.arrayBuffer();
-          if (arrayBuf.byteLength < 100) return; // Too small / empty
-          const audioBuf = await ctx.decodeAudioData(arrayBuf.slice(0)); // slice to avoid detached buffer
-
-          const source = ctx.createBufferSource();
-          const gain = ctx.createGain();
-          const pan = ctx.createStereoPanner();
-
-          // EQ: 3-band (low shelf, peaking mid, high shelf)
-          const eqLow = ctx.createBiquadFilter();
-          eqLow.type = 'lowshelf';
-          eqLow.frequency.value = 320;
-          eqLow.gain.value = track.effects.eq[0];
-
-          const eqMid = ctx.createBiquadFilter();
-          eqMid.type = 'peaking';
-          eqMid.frequency.value = 1000;
-          eqMid.Q.value = 1;
-          eqMid.gain.value = track.effects.eq[1];
-
-          const eqHigh = ctx.createBiquadFilter();
-          eqHigh.type = 'highshelf';
-          eqHigh.frequency.value = 3200;
-          eqHigh.gain.value = track.effects.eq[2];
-
-          // Compressor
-          const compressor = ctx.createDynamicsCompressor();
-          compressor.threshold.value = -24 + (track.effects.comp / 100) * 24; // 0 = -24dB, 100 = 0dB
-          compressor.ratio.value = 4;
-          compressor.attack.value = 0.003;
-          compressor.release.value = 0.25;
-
-          // Reverb send (simple delay-based)
-          const reverb = ctx.createGain();
-          reverb.gain.value = track.effects.reverb / 100;
-
-          source.buffer = audioBuf;
-          source.loop = true;
-          gain.gain.value = track.mute ? 0 : track.volume / 100;
-          pan.pan.value = track.pan / 100;
-
-          // Chain: source → eqLow → eqMid → eqHigh → compressor → gain → pan → destination
-          source.connect(eqLow);
-          eqLow.connect(eqMid);
-          eqMid.connect(eqHigh);
-          eqHigh.connect(compressor);
-          compressor.connect(gain);
-          gain.connect(pan);
-          pan.connect(ctx.destination);
-
-          // Reverb send: source → reverb gain → delay → destination
-          if (track.effects.reverb > 0) {
-            const delay = ctx.createDelay();
-            delay.delayTime.value = 0.03;
-            const fbGain = ctx.createGain();
-            fbGain.gain.value = 0.4;
-            source.connect(reverb);
-            reverb.connect(delay);
-            delay.connect(fbGain);
-            fbGain.connect(delay); // feedback loop
-            delay.connect(ctx.destination);
-          }
-
-          source.start(0);
-
-          audioSourcesRef.current[track.id] = { source, gain, pan, eqLow, eqMid, eqHigh, compressor, reverb };
-        } catch (err) {
-          console.error(`Failed to play track ${track.name}:`, err);
-        }
+      playable.slice(0, 4).forEach((t, i) => {
+        const pt: ProjectTrack = {
+          id: t.id, name: t.title, type: 'audio', color: COLORS[i % COLORS.length],
+          audioUrl: t.audio_url, volume: 80, pan: 0, mute: false, solo: false,
+          effects: { eqLow: 0, eqMid: 0, eqHigh: 0, compThreshold: -24, compRatio: 4, reverbSend: 0, delaySend: 0 },
+        };
+        store.updateProject({ tracks: [...(store.project?.tracks || []), pt] });
+        const st = projectToStudio(pt, i);
+        eng.createTrack(st.id, { volume: st.volume, pan: st.pan, mute: st.mute, solo: st.solo });
+        if (st.audioUrl) eng.loadAudio(st.id, st.audioUrl);
+        studioTracks.push(st);
       });
 
-      // Animate playhead + real meters
+      if (studioTracks.length < 2) {
+        const pt = store.addTrack('Audio 1', 'audio');
+        const st = projectToStudio(pt, studioTracks.length);
+        eng.createTrack(st.id);
+        studioTracks.push(st);
+      }
+      const pt = store.addTrack('Record Here', 'audio');
+      const st = projectToStudio(pt, studioTracks.length);
+      eng.createTrack(st.id);
+      studioTracks.push(st);
+
+      setTracks(studioTracks);
+    }).catch(() => {
+      const t1 = store.addTrack('Audio 1', 'audio');
+      const t2 = store.addTrack('Record Here', 'audio');
+      const st1 = projectToStudio(t1, 0);
+      const st2 = projectToStudio(t2, 1);
+      eng.createTrack(st1.id);
+      eng.createTrack(st2.id);
+      setTracks([st1, st2]);
+    });
+  }, [initialized, store]);
+
+  // ─── Cleanup ───
+  useEffect(() => () => { disposeAudioEngine(); }, []);
+
+  // ─── Play/Stop via engine + animate playhead + real meters ───
+  useEffect(() => {
+    const eng = engine.current;
+    if (playing) {
+      // Load + play all tracks that have audio
+      const playPromises = tracks.map(async (track) => {
+        if (!track.audioUrl || track.mute) return;
+        if (track.audioUrl.endsWith('.webm')) return;
+        // Ensure audio is loaded
+        if (!eng.getTrack(track.id)?.buffer) {
+          await eng.loadAudio(track.id, track.audioUrl);
+        }
+        eng.playTrack(track.id, pos);
+      });
+
+      // Animate playhead + real meters from engine analysers
       startRef.current = performance.now() - pos * 1000;
       const tick = () => {
         const t = (performance.now() - startRef.current) / 1000;
         setPos(t);
         const m: Record<string, [number, number]> = {};
         tracks.forEach(tr => {
-          if (tr.mute || !tr.audioUrl) { m[tr.id] = [0, 0]; return; }
-          // Real-ish meters based on volume
-          const base = (tr.volume / 100) * 0.6;
-          m[tr.id] = [base + Math.random() * 0.3, base + Math.random() * 0.3];
+          m[tr.id] = eng.getTrackLevel(tr.id);
         });
         setMeters(m);
         animRef.current = requestAnimationFrame(tick);
       };
       animRef.current = requestAnimationFrame(tick);
     } else {
-      // Stop all audio
       cancelAnimationFrame(animRef.current);
-      Object.values(audioSourcesRef.current).forEach(({ source }) => {
-        try { source?.stop(); } catch { /* already stopped */ }
-      });
-      audioSourcesRef.current = {};
+      eng.stopAll();
       const m: Record<string, [number, number]> = {};
       tracks.forEach(tr => { m[tr.id] = [0, 0]; });
       setMeters(m);
@@ -573,22 +435,7 @@ export default function StudioPage() {
     return () => cancelAnimationFrame(animRef.current);
   }, [playing]);
 
-  function upd(id: string, u: Partial<TrackLane>) {
-    setTracks(p => {
-      const next = p.map(t => t.id === id ? { ...t, ...u } : t);
-      pushHistory(next);
-      return next;
-    });
-  }
-
-  function addTrack(type: TrackLane['type']) {
-    const n = tracks.length;
-    const names: Record<string, string> = { audio: `Audio ${n+1}`, midi: `MIDI ${n+1}`, ai: `AI ${n+1}` };
-    const track = mkTrack(names[type], n, type, type === 'ai');
-    track.id = `t-new-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    setTracks(p => [...p, track]);
-  }
-
+  // ─── Derived values ───
   const bar = Math.floor(pos * bpm / 60 / 4) + 1;
   const beat = Math.floor(pos * bpm / 60) % 4 + 1;
   const mins = Math.floor(pos / 60);
@@ -597,9 +444,18 @@ export default function StudioPage() {
   const pxPerBar = 80 * zoom;
   const playPx = (pos * bpm / 60 / 4) * pxPerBar;
 
-  // Master meter
-  const masterL = playing ? Math.min(0.95, tracks.reduce((s, t) => s + (meters[t.id]?.[0] || 0), 0) / Math.max(tracks.length, 1) * 1.5) : 0;
-  const masterR = playing ? Math.min(0.95, tracks.reduce((s, t) => s + (meters[t.id]?.[1] || 0), 0) / Math.max(tracks.length, 1) * 1.5) : 0;
+  const [masterL, masterR] = playing ? engine.current.getMasterLevel() : [0, 0];
+
+  const BOTTOM_TABS = [
+    { id: 'mixer', label: 'Mixer', icon: <SlidersIcon className="w-3 h-3" /> },
+    { id: 'fx', label: 'Effects', icon: <Activity className="w-3 h-3" /> },
+    { id: 'synth', label: 'Synth', icon: <Keyboard className="w-3 h-3" /> },
+    { id: 'drums', label: 'Drums', icon: <Drum className="w-3 h-3" /> },
+    { id: 'piano', label: 'Piano Roll', icon: <Piano className="w-3 h-3" /> },
+    { id: 'chords', label: 'Chords', icon: <Music className="w-3 h-3" /> },
+    { id: 'bass', label: '808 Bass', icon: <Volume2 className="w-3 h-3" /> },
+    { id: 'browser', label: 'Sounds', icon: <Music className="w-3 h-3" /> },
+  ];
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden select-none" style={{ background: 'linear-gradient(180deg, #0c0c14 0%, #080810 100%)' }}>
@@ -647,7 +503,7 @@ export default function StudioPage() {
         <div className="flex items-center gap-1.5">
           <div className="bg-white/[0.03] rounded-lg px-2.5 py-1 border border-white/5">
             <p className="text-[7px] text-gray-600 uppercase">Tempo</p>
-            <input type="number" value={bpm} onChange={(e) => setBpm(parseInt(e.target.value) || 120)}
+            <input type="number" value={bpm} onChange={(e) => { const v = parseInt(e.target.value) || 120; setBpm(v); engine.current.setBpm(v); }}
               className="w-10 bg-transparent text-sm font-mono text-white font-bold focus:outline-none" />
           </div>
           <div className="bg-white/[0.03] rounded-lg px-2.5 py-1 border border-white/5">
@@ -673,8 +529,8 @@ export default function StudioPage() {
           <span className="text-[9px] text-gray-600">Zoom</span>
           <input type="range" min={0.3} max={3} step={0.1} value={zoom} onChange={(e) => setZoom(parseFloat(e.target.value))}
             className="w-16 accent-purple-500" />
-          <button onClick={undo} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5" title="Undo (Cmd+Z)"><Undo2 className="w-3.5 h-3.5" /></button>
-          <button onClick={redo} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5" title="Redo (Cmd+Shift+Z)"><Redo2 className="w-3.5 h-3.5" /></button>
+          <button onClick={() => store.undo()} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5" title="Undo (Cmd+Z)"><Undo2 className="w-3.5 h-3.5" /></button>
+          <button onClick={() => store.redo()} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5" title="Redo (Cmd+Shift+Z)"><Redo2 className="w-3.5 h-3.5" /></button>
           <button className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5" title="Save"><Save className="w-3.5 h-3.5" /></button>
           <button onClick={() => setShowExport(true)} className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:text-white hover:bg-white/5" title="Export Song"><Download className="w-3.5 h-3.5" /></button>
         </div>
@@ -717,6 +573,7 @@ export default function StudioPage() {
                     const res = await fetch('/api/upload', { method: 'POST', body: formData });
                     const data = await res.json();
                     if (res.ok && data.audio_url) {
+                      await engine.current.loadAudio(track.id, data.audio_url);
                       upd(track.id, { audioUrl: data.audio_url, name: file.name.replace(/\.[^.]+$/, ''), waveform: wave() });
                     }
                   } catch { /* ignore */ }
@@ -749,7 +606,7 @@ export default function StudioPage() {
                     <input type="range" min={0} max={100} value={track.volume}
                       onChange={(e) => upd(track.id, { volume: parseInt(e.target.value) })}
                       className="w-16 accent-purple-500 ml-auto" style={{ height: 3 }} />
-                    <button onClick={(e) => { e.stopPropagation(); setTracks(p => p.filter(t => t.id !== track.id)); }}
+                    <button onClick={(e) => { e.stopPropagation(); engine.current.removeTrack(track.id); store.removeTrack(track.id); setTracks(p => p.filter(t => t.id !== track.id)); }}
                       className="opacity-0 group-hover:opacity-100 text-gray-700 hover:text-red-400 ml-1"><Trash2 className="w-3 h-3" /></button>
                   </div>
                 </div>
@@ -790,8 +647,6 @@ export default function StudioPage() {
                   {track.showAutomation ? '▼ Auto' : '▶ Auto'}
                 </button>
               </div>
-
-              {/* Automation — will rebuild on proper foundation */}
             </React.Fragment>
           ))}
 
@@ -801,7 +656,7 @@ export default function StudioPage() {
                 {[
                   { type: 'audio' as const, icon: Mic, label: 'Audio', color: 'text-green-500' },
                   { type: 'midi' as const, icon: Piano, label: 'MIDI', color: 'text-blue-500' },
-                  { type: 'ai' as const, icon: Wand2, label: 'AI', color: 'text-pink-500' },
+                  { type: 'instrument' as const, icon: Wand2, label: 'AI', color: 'text-pink-500' },
                 ].map(({ type, icon: Icon, label, color }) => (
                   <button key={type} onClick={() => addTrack(type)}
                     className={`flex items-center gap-1 text-[9px] ${color} opacity-40 hover:opacity-100 px-2 py-1 rounded hover:bg-white/5 transition-all`}>
@@ -817,24 +672,8 @@ export default function StudioPage() {
       {/* ═══ BOTTOM: MIXER / FX / BROWSER ═══ */}
       <div className="flex-shrink-0 border-t border-white/5" style={{ background: 'linear-gradient(180deg, #0e0e18, #0a0a12)' }}>
         {/* Tabs */}
-        <div className="h-7 flex items-center px-2 gap-0.5 border-b border-white/[0.03]">
-          {[
-            { id: 'mixer' as const, label: 'Mixer', icon: SlidersIcon },
-            { id: 'fx' as const, label: 'Effects', icon: Activity },
-            { id: 'synth' as const, label: 'Synth', icon: Keyboard },
-            { id: 'drums' as const, label: 'Drums', icon: Drum },
-            { id: 'piano' as const, label: 'Piano Roll', icon: Piano },
-            { id: 'chords' as const, label: 'Chords', icon: Music },
-            { id: 'bass' as const, label: '808 Bass', icon: Volume2 },
-            { id: 'browser' as const, label: 'Sounds', icon: Music },
-          ].map(({ id, label, icon: Icon }) => (
-            <button key={id} onClick={() => setBottomTab(id)}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-medium transition-all ${
-                bottomTab === id ? 'bg-white/[0.06] text-white' : 'text-gray-600 hover:text-gray-300'
-              }`}>
-              <Icon className="w-3 h-3" /> {label}
-            </button>
-          ))}
+        <div className="h-7 flex items-center px-2 border-b border-white/[0.03]">
+          <Tabs tabs={BOTTOM_TABS} active={bottomTab} onChange={setBottomTab} />
         </div>
 
         {/* MIXER */}
@@ -850,7 +689,7 @@ export default function StudioPage() {
               <div className="pt-2 pb-1">
                 <span className="text-[9px] text-teal-400 font-bold tracking-wider">MASTER</span>
               </div>
-              <Knob value={80} onChange={() => {}} label="Vol" color="mint" />
+              <Knob value={80} onChange={(v) => engine.current.setMasterVolume(v)} label="Vol" color="mint" />
               <div className="flex items-end gap-2 flex-1 pb-2">
                 <div className="flex flex-col-reverse gap-[1px]">
                   {Array.from({ length: 24 }, (_, i) => {
@@ -890,44 +729,43 @@ export default function StudioPage() {
                   <div className="flex-1 bg-white/[0.02] rounded-xl p-3 border border-white/5">
                     <p className="text-[10px] text-teal-400 font-bold mb-3">PARAMETRIC EQ</p>
                     <div className="flex gap-4 items-end justify-center h-24">
-                      {(['LOW', 'MID', 'HIGH'] as const).map((band, i) => (
-                        <div key={band} className="flex flex-col items-center">
-                          <Knob value={t.effects.eq[i]} onChange={(v) => {
-                            const eq: [number, number, number] = [...t.effects.eq];
-                            eq[i] = v;
-                            upd(t.id, { effects: { ...t.effects, eq } });
-                          }} label={band} min={-12} max={12} color="purple" />
-                          <span className="text-[8px] text-gray-600 mt-1">{t.effects.eq[i] > 0 ? '+' : ''}{t.effects.eq[i]}dB</span>
-                        </div>
-                      ))}
+                      {(['LOW', 'MID', 'HIGH'] as const).map((band, i) => {
+                        const keys = ['eqLow', 'eqMid', 'eqHigh'] as const;
+                        const val = t.effects[keys[i]];
+                        return (
+                          <div key={band} className="flex flex-col items-center">
+                            <Knob value={val} onChange={(v) => {
+                              const fx = { ...t.effects, [keys[i]]: v };
+                              upd(t.id, { effects: fx });
+                            }} label={band} min={-12} max={12} color="purple" />
+                            <span className="text-[8px] text-gray-600 mt-1">{val > 0 ? '+' : ''}{val}dB</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                   {/* Dynamics */}
                   <div className="flex-1 bg-white/[0.02] rounded-xl p-3 border border-white/5">
                     <p className="text-[10px] text-blue-400 font-bold mb-3">COMPRESSOR</p>
                     <div className="flex gap-4 items-end justify-center h-24">
-                      <Knob value={t.effects.comp} onChange={(v) => upd(t.id, { effects: { ...t.effects, comp: v } })} label="Amount" color="blue" />
+                      <Knob value={Math.round((t.effects.compThreshold + 40) * (100 / 40))} onChange={(v) => {
+                        const threshold = (v / 100) * 40 - 40;
+                        upd(t.id, { effects: { ...t.effects, compThreshold: threshold } });
+                      }} label="Amount" color="blue" />
                     </div>
                   </div>
                   {/* Reverb */}
                   <div className="flex-1 bg-white/[0.02] rounded-xl p-3 border border-white/5">
                     <p className="text-[10px] text-teal-400 font-bold mb-3">REVERB</p>
                     <div className="flex gap-4 items-end justify-center h-24">
-                      <Knob value={t.effects.reverb} onChange={(v) => upd(t.id, { effects: { ...t.effects, reverb: v } })} label="Size" color="green" />
+                      <Knob value={t.effects.reverbSend} onChange={(v) => upd(t.id, { effects: { ...t.effects, reverbSend: v } })} label="Size" color="green" />
                     </div>
                   </div>
                   {/* Delay */}
                   <div className="flex-1 bg-white/[0.02] rounded-xl p-3 border border-white/5">
                     <p className="text-[10px] text-yellow-400 font-bold mb-3">DELAY</p>
                     <div className="flex gap-4 items-end justify-center h-24">
-                      <Knob value={t.effects.delay} onChange={(v) => upd(t.id, { effects: { ...t.effects, delay: v } })} label="Time" color="yellow" />
-                    </div>
-                  </div>
-                  {/* Chorus */}
-                  <div className="flex-1 bg-white/[0.02] rounded-xl p-3 border border-white/5">
-                    <p className="text-[10px] text-pink-400 font-bold mb-3">CHORUS</p>
-                    <div className="flex gap-4 items-end justify-center h-24">
-                      <Knob value={t.effects.chorus} onChange={(v) => upd(t.id, { effects: { ...t.effects, chorus: v } })} label="Depth" color="pink" />
+                      <Knob value={t.effects.delaySend} onChange={(v) => upd(t.id, { effects: { ...t.effects, delaySend: v } })} label="Time" color="yellow" />
                     </div>
                   </div>
                 </div>
@@ -938,7 +776,7 @@ export default function StudioPage() {
           </div>
         )}
 
-        {/* BROWSER */}
+        {/* BROWSER / Sounds */}
         {bottomTab === 'browser' && (
           <div className="h-56 p-3 overflow-auto">
             <div className="grid grid-cols-6 gap-1.5">
@@ -948,18 +786,7 @@ export default function StudioPage() {
                 'Brass Stab', 'Flute Melody', 'Bell Chime', 'Percussion', 'Shaker', 'Vinyl Noise',
               ].map(sample => (
                 <button key={sample}
-                  onClick={() => {
-                    const ctx = new AudioContext();
-                    const osc = ctx.createOscillator();
-                    const gain = ctx.createGain();
-                    osc.connect(gain);
-                    gain.connect(ctx.destination);
-                    gain.gain.value = 0.3;
-                    osc.frequency.value = 200 + Math.random() * 600;
-                    osc.start();
-                    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
-                    osc.stop(ctx.currentTime + 0.3);
-                  }}
+                  onClick={() => engine.current.playTone(200 + Math.random() * 600, 'sine', 0.3, 0.3)}
                   className="bg-white/[0.02] hover:bg-white/[0.05] border border-white/[0.03] hover:border-white/10 rounded-lg p-2 text-left transition-all group cursor-pointer">
                   <div className="flex items-center gap-1.5">
                     <Play className="w-2.5 h-2.5 text-gray-700 group-hover:text-teal-400 transition-colors" />
@@ -1009,7 +836,7 @@ export default function StudioPage() {
       {showExport && (
         <ExportDialog
           tracks={tracks.map(t => ({ name: t.name, url: t.audioUrl, volume: t.volume - 80, pan: t.pan, mute: t.mute }))}
-          title="My Song"
+          title={store.project?.title || 'My Song'}
           onClose={() => setShowExport(false)}
         />
       )}
