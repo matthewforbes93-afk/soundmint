@@ -101,6 +101,8 @@ export class BeatPlayer {
   private step = 0;
   private config: BeatConfig;
   private masterGain: GainNode;
+  private samplesLoaded = false;
+  private sampleBuffers: Record<string, AudioBuffer> = {};
 
   // Stereo buses for spatial placement
   private hhPan: StereoPannerNode;
@@ -125,9 +127,44 @@ export class BeatPlayer {
     this.chordPanL.connect(this.masterGain);
     this.chordPanR.connect(this.masterGain);
     this.masterGain.connect(this.ctx.destination);
+
+    // Load WAV samples
+    this.loadSamples();
+  }
+
+  private async loadSamples() {
+    const sampleNames = ['kick', 'snare', 'hihat', 'hihat-open', 'clap', '808', 'rim', 'perc'];
+    try {
+      await Promise.all(sampleNames.map(async (name) => {
+        const res = await fetch(`/samples/${name}.wav`);
+        if (!res.ok) return;
+        const buf = await res.arrayBuffer();
+        this.sampleBuffers[name] = await this.ctx.decodeAudioData(buf);
+      }));
+      this.samplesLoaded = true;
+    } catch {
+      // Samples failed to load — will fall back to synthesis
+      this.samplesLoaded = false;
+    }
+  }
+
+  private playSample(name: string, dest: AudioNode, volume = 1.0) {
+    const buffer = this.sampleBuffers[name];
+    if (!buffer) return;
+    const source = this.ctx.createBufferSource();
+    source.buffer = buffer;
+    const gain = this.ctx.createGain();
+    gain.gain.value = volume * (0.8 + Math.random() * 0.2); // Velocity variation
+    source.connect(gain);
+    gain.connect(dest);
+    source.start();
   }
 
   private playKick() {
+    if (this.samplesLoaded && this.sampleBuffers['kick']) {
+      this.playSample('kick', this.masterGain, 0.9);
+      return;
+    }
     const t = this.ctx.currentTime;
     const vel = 0.7 + Math.random() * 0.3;
 
@@ -166,6 +203,10 @@ export class BeatPlayer {
   }
 
   private playSnare() {
+    if (this.samplesLoaded && this.sampleBuffers['snare']) {
+      this.playSample('snare', this.masterGain, 0.8);
+      return;
+    }
     const t = this.ctx.currentTime;
     const vel = 0.5 + Math.random() * 0.2;
 
@@ -206,6 +247,10 @@ export class BeatPlayer {
   }
 
   private playHihat(open = false) {
+    if (this.samplesLoaded) {
+      const name = open ? 'hihat-open' : 'hihat';
+      if (this.sampleBuffers[name]) { this.playSample(name, this.hhPan, 0.6); return; }
+    }
     const t = this.ctx.currentTime;
     const vel = 0.15 + Math.random() * 0.1;
     const duration = open ? 0.15 : 0.04 + Math.random() * 0.02;
@@ -236,6 +281,10 @@ export class BeatPlayer {
   }
 
   private playClap() {
+    if (this.samplesLoaded && this.sampleBuffers['clap']) {
+      this.playSample('clap', this.clapPan, 0.7);
+      return;
+    }
     const t = this.ctx.currentTime;
     const vel = 0.4 + Math.random() * 0.15;
 
