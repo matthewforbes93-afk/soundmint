@@ -13,7 +13,6 @@ import { BeatPlayer, type BeatConfig } from '@/lib/beatFactory';
 import LevelMeter from '@/components/LevelMeter';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
-import Card from '@/components/ui/Card';
 import Slider from '@/components/ui/Slider';
 
 // ─── Types ───
@@ -155,7 +154,6 @@ export default function SessionPage() {
       const ok = await engine.startRecording(preset);
       if (!ok) { toast.error('Mic access denied'); return; }
 
-      // Start visualizer from engine's record analyser
       const vizTick = () => {
         const analyser = engine.getRecordAnalyser();
         if (analyser) {
@@ -167,7 +165,6 @@ export default function SessionPage() {
       };
       animRef.current = requestAnimationFrame(vizTick);
 
-      // Start beat + recording timer
       startBeat();
       setIsRecording(true);
       setRecordingTime(0);
@@ -188,7 +185,6 @@ export default function SessionPage() {
 
     toast.success('Processing recording...');
 
-    // Encode to WAV via engine, upload
     let file: File;
     try {
       const wavBuf = engine.encodeWav(audioBuf);
@@ -220,7 +216,6 @@ export default function SessionPage() {
   function playMix() {
     const engine = getAudioEngine();
 
-    // Play beat
     if (beatUrl) {
       const el = document.getElementById('aiBeatAudio') as HTMLAudioElement | null;
       if (el) { el.volume = beatVolume / 100; el.currentTime = 0; el.play().catch(() => {}); }
@@ -233,7 +228,6 @@ export default function SessionPage() {
       beatPlayerRef.current.start();
     }
 
-    // Play vocals through engine track
     if (vocalUrl) {
       const preset = VOCAL_PRESETS[vocalPreset] || VOCAL_PRESETS.raw;
       engine.loadAudio('vocals', vocalUrl).then(ok => {
@@ -286,7 +280,6 @@ export default function SessionPage() {
         toast.success('Session saved');
       } catch { toast.error('Save failed'); }
     } else {
-      // Fallback: raw API save
       try {
         const res = await fetch('/api/sessions', {
           method: 'POST',
@@ -316,510 +309,576 @@ export default function SessionPage() {
   const engine = typeof window !== 'undefined' ? getAudioEngine() : null;
   const recordAnalyser = engine?.getRecordAnalyser() ?? null;
 
+  // ─── Back navigation handler ───
+  function goBack() {
+    if (phase === 'setup') { setPhase('doors'); setDoor(null); }
+    else if (phase === 'booth') { stopAll(); setPhase('setup'); }
+    else if (phase === 'mix') { stopAll(); setPhase('booth'); }
+    else if (phase === 'done') { setPhase('mix'); }
+    else { setPhase('doors'); setDoor(null); }
+  }
+
   // ═══ RENDER ═══
   return (
-    <div className="h-screen bg-black text-white flex flex-col relative overflow-hidden">
-      {/* Ambient glow */}
-      <div className="absolute inset-0 pointer-events-none">
-        <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full transition-all duration-1000 ${
-          isRecording ? 'bg-red-500/[0.03] scale-110' : 'bg-teal-500/[0.02] scale-100'
-        } blur-3xl`} />
+    <div className={`h-full flex flex-col relative overflow-hidden transition-colors duration-700 ${
+      isRecording ? 'bg-[#1a0808]' : 'bg-transparent'
+    }`}>
+      {/* Recording pulse overlay */}
+      {isRecording && (
+        <div className="absolute inset-0 pointer-events-none z-0">
+          <div className="absolute inset-0 animate-[pulse_2s_ease-in-out_infinite] bg-red-900/[0.06]" />
+          <div className="absolute top-0 left-0 right-0 h-px bg-red-500/40" />
+          <div className="absolute bottom-0 left-0 right-0 h-px bg-red-500/40" />
+        </div>
+      )}
+
+      {/* Ambient glow — subtle, behind content */}
+      <div className="absolute inset-0 pointer-events-none z-0">
+        <div className={`absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] rounded-full transition-all duration-1000 ${
+          isRecording ? 'bg-red-500/[0.04] scale-110' : 'bg-teal-500/[0.02] scale-100'
+        } blur-[120px]`} />
       </div>
 
-      {/* ═══ TOP BAR ═══ */}
+      {/* Global audio for AI beat */}
+      {beatUrl && <audio id="aiBeatAudio" src={beatUrl} loop crossOrigin="anonymous" />}
+
+      {/* ═══ TOP BAR — compact session header ═══ */}
       {phase !== 'doors' && (
-        <div className="relative z-20 h-12 flex items-center justify-between px-4 border-b border-white/5 flex-shrink-0">
-          <button onClick={() => {
-            if (phase === 'setup') { setPhase('doors'); setDoor(null); }
-            else if (phase === 'booth') { stopAll(); setPhase('setup'); }
-            else if (phase === 'mix') { stopAll(); setPhase('booth'); }
-            else if (phase === 'done') { setPhase('mix'); }
-            else { setPhase('doors'); setDoor(null); }
-          }} className="flex items-center gap-2 text-gray-500 hover:text-white transition-colors">
-            <ChevronRight className="w-4 h-4 rotate-180" />
+        <div className="relative z-20 h-10 flex items-center justify-between px-4 border-b border-white/[0.04] flex-shrink-0 bg-black/20 backdrop-blur-sm">
+          <button onClick={goBack} className="flex items-center gap-1.5 text-gray-500 hover:text-white transition-colors">
+            <ChevronRight className="w-3.5 h-3.5 rotate-180" />
             <span className="text-xs">Back</span>
           </button>
 
-          <div className="text-center">
-            {songTitle ? (
-              <>
-                <p className="text-sm font-semibold text-white leading-none">{songTitle}</p>
-                <p className="text-[10px] text-gray-600">{artistName}{genre ? ` · ${genre} · ${bpm} BPM` : ''}</p>
-              </>
-            ) : (
-              <p className="text-xs text-gray-600">New Session</p>
+          <div className="flex items-center gap-3">
+            {songTitle && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-white/80">{songTitle}</span>
+                {artistName && <span className="text-xs text-gray-600">{artistName}</span>}
+                {genre && <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.04] text-gray-500">{genre} {bpm}</span>}
+              </div>
             )}
+            {!songTitle && <span className="text-xs text-gray-600">New Session</span>}
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             {songTitle && phase !== 'setup' && (
-              <Button variant="secondary" size="sm" onClick={saveSession}>Save</Button>
+              <Button variant="ghost" size="sm" onClick={saveSession}>Save</Button>
             )}
             {vocalUrl && phase !== 'done' && (
               <Button size="sm" onClick={exportSong} loading={exporting} icon={<Download className="w-3 h-3" />}>
                 Export
               </Button>
             )}
-            <button onClick={reset} className="text-gray-700 hover:text-white">
-              <X className="w-4 h-4" />
+            <button onClick={reset} className="text-gray-700 hover:text-white p-1">
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
         </div>
       )}
 
-      {/* Global audio for AI beat */}
-      {beatUrl && <audio id="aiBeatAudio" src={beatUrl} loop crossOrigin="anonymous" />}
+      {/* ═══ MAIN CONTENT — fills workspace ═══ */}
+      <div className="flex-1 relative z-10 overflow-auto">
 
-      {/* ═══ MAIN CONTENT ═══ */}
-      <div className="flex-1 flex items-center justify-center overflow-auto">
-
-      {/* ═══ DOOR SELECT ═══ */}
-      {phase === 'doors' && (
-        <div className="relative z-10 text-center max-w-2xl px-6">
-          <a href="/" className="absolute top-0 left-6 flex items-center gap-2 text-gray-400 hover:text-teal-400 transition-colors text-sm bg-white/5 px-3 py-1.5 rounded-lg border border-white/10 hover:border-teal-500/30">
-            <ChevronRight className="w-4 h-4 rotate-180" /> Home
-          </a>
-
-          <h1 className="text-4xl font-bold mb-2 tracking-tight">
-            Sound<span className="text-teal-400">Mint</span>
-          </h1>
-          <p className="text-gray-600 text-sm mb-12">What do you want to make?</p>
-
-          <div className="grid grid-cols-3 gap-4">
-            {([
-              { id: 'write' as Door, icon: PenTool, label: 'Write', desc: 'Start with lyrics or a melody' },
-              { id: 'record' as Door, icon: Mic, label: 'Record', desc: 'Step up to the mic' },
-              { id: 'build' as Door, icon: Grid3X3, label: 'Build', desc: 'Construct a beat from scratch' },
-            ]).map(({ id, icon: Icon, label, desc }) => (
-              <button key={id} onClick={() => { setDoor(id); setPhase('setup'); }}
-                className="group p-8 rounded-2xl border border-white/5 bg-white/[0.02] hover:bg-white/[0.04] hover:border-teal-500/20 transition-all hover:scale-[1.02] hover:shadow-teal-500/10 hover:shadow-2xl">
-                <div className="w-14 h-14 rounded-2xl bg-teal-500/10 flex items-center justify-center mx-auto mb-4 group-hover:bg-teal-500/20 transition-colors">
-                  <Icon className="w-6 h-6 text-teal-400" />
-                </div>
-                <h3 className="text-lg font-semibold mb-1">{label}</h3>
-                <p className="text-xs text-gray-600">{desc}</p>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ═══ SETUP ═══ */}
-      {phase === 'setup' && (
-        <div className="relative z-10 w-full max-w-md px-6">
-          <button onClick={reset} className="absolute top-0 right-6 text-gray-700 hover:text-white"><X className="w-5 h-5" /></button>
-
-          <div className="text-center mb-8">
-            <div className="w-12 h-12 rounded-2xl bg-teal-500/10 flex items-center justify-center mx-auto mb-4">
-              {door === 'write' ? <PenTool className="w-5 h-5 text-teal-400" /> :
-               door === 'record' ? <Mic className="w-5 h-5 text-teal-400" /> :
-               <Grid3X3 className="w-5 h-5 text-teal-400" />}
-            </div>
-            <h2 className="text-xl font-bold">
-              {door === 'write' ? 'Write a Song' : door === 'record' ? 'Record a Track' : 'Build a Beat'}
-            </h2>
-          </div>
-
-          <div className="space-y-4">
-            <Input
-              value={artistName}
-              onChange={e => setArtistName(e.target.value)}
-              placeholder="Artist name"
-              autoFocus
-              className="text-center text-lg"
-            />
-
-            <Input
-              value={songTitle}
-              onChange={e => handleTitle(e.target.value)}
-              placeholder="Song title"
-              className="text-center text-lg"
-            />
-
-            {songTitle.length > 2 && (
-              <div className="flex gap-2 justify-center">
-                <span className="text-[10px] px-2 py-1 rounded-full bg-teal-500/10 text-teal-400">{genre}</span>
-                <span className="text-[10px] px-2 py-1 rounded-full bg-teal-500/10 text-teal-400">{mood}</span>
-                <span className="text-[10px] px-2 py-1 rounded-full bg-teal-500/10 text-teal-400">{bpm} BPM</span>
+        {/* ═══ DOOR SELECT — three large panels ═══ */}
+        {phase === 'doors' && (
+          <div className="h-full flex flex-col p-6">
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h2 className="text-xl font-semibold text-white/90 tracking-tight">
+                  Sound<span className="text-teal-400">Mint</span> Session
+                </h2>
+                <p className="text-xs text-gray-600 mt-0.5">Choose your workflow</p>
               </div>
-            )}
+              <a href="/" className="flex items-center gap-1.5 text-gray-500 hover:text-teal-400 transition-colors text-xs px-3 py-1.5 rounded-lg border border-white/[0.06] hover:border-teal-500/20">
+                <ChevronRight className="w-3 h-3 rotate-180" /> Home
+              </a>
+            </div>
 
-            {door === 'write' && (
-              <textarea value={lyrics} onChange={e => setLyrics(e.target.value)}
-                placeholder="Write your lyrics here..."
-                rows={6}
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder:text-gray-700 focus:outline-none focus:border-teal-500/50 text-sm leading-relaxed" />
-            )}
+            <div className="flex-1 grid grid-cols-3 gap-4 min-h-0">
+              {([
+                { id: 'write' as Door, icon: PenTool, label: 'Write', desc: 'Start with lyrics or a melody idea. AI helps shape it into a full track.', accent: 'teal' },
+                { id: 'record' as Door, icon: Mic, label: 'Record', desc: 'Step into the booth. Beat plays, you record over it. Mix and export.', accent: 'teal' },
+                { id: 'build' as Door, icon: Grid3X3, label: 'Build', desc: 'Construct a beat from scratch in the studio with drums, synths, and bass.', accent: 'teal' },
+              ]).map(({ id, icon: Icon, label, desc }) => (
+                <button key={id} onClick={() => { setDoor(id); setPhase('setup'); }}
+                  className="group relative flex flex-col items-center justify-center rounded-2xl border border-white/[0.04] bg-white/[0.01] hover:bg-white/[0.03] hover:border-teal-500/20 transition-all duration-300 overflow-hidden">
+                  {/* Hover glow */}
+                  <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none">
+                    <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-[200px] h-[200px] rounded-full bg-teal-500/[0.06] blur-[80px]" />
+                  </div>
+                  <div className="relative z-10 flex flex-col items-center">
+                    <div className="w-20 h-20 rounded-2xl bg-teal-500/[0.08] flex items-center justify-center mb-5 group-hover:bg-teal-500/[0.14] transition-colors duration-300 group-hover:shadow-lg group-hover:shadow-teal-500/[0.08]">
+                      <Icon className="w-9 h-9 text-teal-400/70 group-hover:text-teal-400 transition-colors" />
+                    </div>
+                    <h3 className="text-lg font-semibold mb-2 text-white/90">{label}</h3>
+                    <p className="text-xs text-gray-600 max-w-[200px] leading-relaxed">{desc}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
-            <div className="flex gap-3">
-              <Button size="lg" className="flex-1" icon={<Zap className="w-5 h-5" />}
-                disabled={!artistName.trim() || !songTitle.trim()}
-                onClick={async () => {
+        {/* ═══ SETUP — session config ═══ */}
+        {phase === 'setup' && (
+          <div className="h-full flex">
+            {/* Left panel — form */}
+            <div className="flex-1 flex flex-col justify-center px-12 max-w-xl mx-auto">
+              <div className="flex items-center gap-3 mb-8">
+                <div className="w-10 h-10 rounded-xl bg-teal-500/[0.08] flex items-center justify-center">
+                  {door === 'write' ? <PenTool className="w-4.5 h-4.5 text-teal-400" /> :
+                   door === 'record' ? <Mic className="w-4.5 h-4.5 text-teal-400" /> :
+                   <Grid3X3 className="w-4.5 h-4.5 text-teal-400" />}
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-white/90">
+                    {door === 'write' ? 'Write a Song' : door === 'record' ? 'Record a Track' : 'Build a Beat'}
+                  </h2>
+                  <p className="text-xs text-gray-600">Name your session to get started</p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <Input
+                  value={artistName}
+                  onChange={e => setArtistName(e.target.value)}
+                  placeholder="Artist name"
+                  autoFocus
+                  label="Artist"
+                />
+
+                <Input
+                  value={songTitle}
+                  onChange={e => handleTitle(e.target.value)}
+                  placeholder="Song title — type a vibe and we detect the genre"
+                  label="Title"
+                />
+
+                {songTitle.length > 2 && (
+                  <div className="flex gap-2">
+                    <span className="text-[10px] px-2.5 py-1 rounded-full bg-teal-500/[0.08] text-teal-400/80 border border-teal-500/10">{genre}</span>
+                    <span className="text-[10px] px-2.5 py-1 rounded-full bg-teal-500/[0.08] text-teal-400/80 border border-teal-500/10">{mood}</span>
+                    <span className="text-[10px] px-2.5 py-1 rounded-full bg-teal-500/[0.08] text-teal-400/80 border border-teal-500/10">{bpm} BPM</span>
+                  </div>
+                )}
+
+                {door === 'write' && (
+                  <div>
+                    <label className="text-sm text-gray-300 mb-1.5 block">Lyrics</label>
+                    <textarea value={lyrics} onChange={e => setLyrics(e.target.value)}
+                      placeholder="Write your lyrics here..."
+                      rows={6}
+                      className="w-full bg-white/[0.03] border border-white/[0.06] rounded-xl px-4 py-3 text-white placeholder:text-gray-700 focus:outline-none focus:border-teal-500/30 text-sm leading-relaxed resize-none" />
+                  </div>
+                )}
+
+                <div className="flex gap-3 pt-2">
+                  <Button size="lg" className="flex-1" icon={<Zap className="w-4 h-4" />}
+                    disabled={!artistName.trim() || !songTitle.trim()}
+                    onClick={async () => {
+                      if (!artistName.trim() || !songTitle.trim()) return toast.error('Enter name and title');
+                      ensureProject();
+                      if (door === 'build') { window.location.href = '/studio'; return; }
+                      try {
+                        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                        stream.getTracks().forEach(t => t.stop());
+                      } catch { toast.error('Mic access needed to record'); return; }
+                      setPhase('booth');
+                      setTimeout(startBeat, 200);
+                    }}>
+                    Instant Beat
+                  </Button>
+                  <Button variant="secondary" size="lg" className="flex-1" icon={<Wand2 className="w-4 h-4" />}
+                    disabled={!artistName.trim() || !songTitle.trim()}
+                    onClick={async () => {
+                      if (!artistName.trim() || !songTitle.trim()) return toast.error('Enter name and title');
+                      ensureProject();
+                      try {
+                        const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+                        s.getTracks().forEach(t => t.stop());
+                      } catch { toast.error('Mic access needed'); return; }
+                      setPhase('creating');
+                      try {
+                        const res = await fetch('/api/tracks', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ genre, mood, prompt: `${genre} ${mood} ${bpm} BPM instrumental`, artist_name: artistName, ai_provider: 'musicgen' }),
+                        });
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.error);
+                        const poll = setInterval(async () => {
+                          const check = await fetch(`/api/tracks/${data.id}`);
+                          const track = await check.json();
+                          if (track.status === 'ready' && track.audio_url) {
+                            clearInterval(poll);
+                            setBeatUrl(track.audio_url);
+                            setPhase('booth');
+                            toast.success('AI beat ready!');
+                          } else if (track.status === 'failed') {
+                            clearInterval(poll);
+                            toast.error('Generation failed -- using instant beat');
+                            setPhase('booth');
+                            setTimeout(startBeat, 200);
+                          }
+                        }, 5000);
+                      } catch {
+                        toast.error('AI failed -- using instant beat');
+                        setPhase('booth');
+                        setTimeout(startBeat, 200);
+                      }
+                    }}>
+                    AI Beat
+                  </Button>
+                </div>
+
+                {/* AI Full Song option */}
+                <button onClick={async () => {
                   if (!artistName.trim() || !songTitle.trim()) return toast.error('Enter name and title');
                   ensureProject();
-                  if (door === 'build') { window.location.href = '/studio'; return; }
-                  try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    stream.getTracks().forEach(t => t.stop());
-                  } catch { toast.error('Mic access needed to record'); return; }
-                  setPhase('booth');
-                  setTimeout(startBeat, 200);
-                }}>
-                Instant Beat
-              </Button>
-              <Button variant="secondary" size="lg" className="flex-1" icon={<Wand2 className="w-4 h-4" />}
-                disabled={!artistName.trim() || !songTitle.trim()}
-                onClick={async () => {
-                  if (!artistName.trim() || !songTitle.trim()) return toast.error('Enter name and title');
-                  ensureProject();
-                  try {
-                    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    s.getTracks().forEach(t => t.stop());
-                  } catch { toast.error('Mic access needed'); return; }
                   setPhase('creating');
                   try {
+                    const prompt = lyrics
+                      ? `${genre} ${mood} ${bpm} BPM song with vocals singing: ${lyrics.slice(0, 200)}`
+                      : `${genre} ${mood} ${bpm} BPM song with vocals, catchy melody, about ${songTitle}`;
                     const res = await fetch('/api/tracks', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ genre, mood, prompt: `${genre} ${mood} ${bpm} BPM instrumental`, artist_name: artistName, ai_provider: 'musicgen' }),
+                      body: JSON.stringify({
+                        genre, mood, prompt, artist_name: artistName,
+                        ai_provider: 'suno', with_vocals: true, lyrics: lyrics || undefined,
+                      }),
                     });
                     const data = await res.json();
-                    if (!res.ok) throw new Error(data.error);
+                    if (!res.ok) {
+                      toast.error('Full song AI not configured -- generating instrumental');
+                      const fallback = await fetch('/api/tracks', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ genre, mood, prompt: `${genre} ${mood} ${bpm} BPM instrumental`, artist_name: artistName, ai_provider: 'musicgen' }),
+                      });
+                      const fbData = await fallback.json();
+                      if (!fallback.ok) throw new Error(fbData.error);
+                      const poll = setInterval(async () => {
+                        const check = await fetch(`/api/tracks/${fbData.id}`);
+                        const track = await check.json();
+                        if (track.status === 'ready' && track.audio_url) { clearInterval(poll); setBeatUrl(track.audio_url); setPhase('booth'); toast.success('Beat ready'); }
+                        else if (track.status === 'failed') { clearInterval(poll); setPhase('booth'); setTimeout(startBeat, 200); toast.error('Using instant beat'); }
+                      }, 5000);
+                      return;
+                    }
                     const poll = setInterval(async () => {
                       const check = await fetch(`/api/tracks/${data.id}`);
                       const track = await check.json();
                       if (track.status === 'ready' && track.audio_url) {
                         clearInterval(poll);
-                        setBeatUrl(track.audio_url);
-                        setPhase('booth');
-                        toast.success('AI beat ready!');
+                        setVocalUrl(track.audio_url);
+                        setPhase('mix');
+                        toast.success('Full song created!');
                       } else if (track.status === 'failed') {
                         clearInterval(poll);
-                        toast.error('Generation failed -- using instant beat');
+                        toast.error('Full song failed -- entering studio');
                         setPhase('booth');
                         setTimeout(startBeat, 200);
                       }
                     }, 5000);
                   } catch {
-                    toast.error('AI failed -- using instant beat');
+                    toast.error('Failed -- using instant beat');
                     setPhase('booth');
                     setTimeout(startBeat, 200);
                   }
-                }}>
-                AI Beat
-              </Button>
+                }}
+                  disabled={!artistName.trim() || !songTitle.trim()}
+                  className="w-full bg-purple-500/[0.08] hover:bg-purple-500/[0.14] disabled:opacity-30 text-purple-300/80 font-medium py-3 rounded-xl flex items-center justify-center gap-2 border border-purple-500/10 transition-all text-sm">
+                  <Wand2 className="w-4 h-4" /> AI Full Song
+                  <span className="text-[9px] text-purple-500/60 ml-1">requires Suno API</span>
+                </button>
+              </div>
             </div>
+          </div>
+        )}
 
-            {/* AI Full Song option */}
-            <button onClick={async () => {
-              if (!artistName.trim() || !songTitle.trim()) return toast.error('Enter name and title');
-              ensureProject();
-              setPhase('creating');
-              try {
-                const prompt = lyrics
-                  ? `${genre} ${mood} ${bpm} BPM song with vocals singing: ${lyrics.slice(0, 200)}`
-                  : `${genre} ${mood} ${bpm} BPM song with vocals, catchy melody, about ${songTitle}`;
-                const res = await fetch('/api/tracks', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    genre, mood, prompt, artist_name: artistName,
-                    ai_provider: 'suno', with_vocals: true, lyrics: lyrics || undefined,
-                  }),
-                });
-                const data = await res.json();
-                if (!res.ok) {
-                  toast.error('Full song AI not configured -- generating instrumental');
-                  const fallback = await fetch('/api/tracks', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ genre, mood, prompt: `${genre} ${mood} ${bpm} BPM instrumental`, artist_name: artistName, ai_provider: 'musicgen' }),
-                  });
-                  const fbData = await fallback.json();
-                  if (!fallback.ok) throw new Error(fbData.error);
-                  const poll = setInterval(async () => {
-                    const check = await fetch(`/api/tracks/${fbData.id}`);
-                    const track = await check.json();
-                    if (track.status === 'ready' && track.audio_url) { clearInterval(poll); setBeatUrl(track.audio_url); setPhase('booth'); toast.success('Beat ready'); }
-                    else if (track.status === 'failed') { clearInterval(poll); setPhase('booth'); setTimeout(startBeat, 200); toast.error('Using instant beat'); }
-                  }, 5000);
-                  return;
-                }
-                const poll = setInterval(async () => {
-                  const check = await fetch(`/api/tracks/${data.id}`);
-                  const track = await check.json();
-                  if (track.status === 'ready' && track.audio_url) {
-                    clearInterval(poll);
-                    setVocalUrl(track.audio_url);
-                    setPhase('mix');
-                    toast.success('Full song created!');
-                  } else if (track.status === 'failed') {
-                    clearInterval(poll);
-                    toast.error('Full song failed -- entering studio');
-                    setPhase('booth');
-                    setTimeout(startBeat, 200);
-                  }
-                }, 5000);
-              } catch {
-                toast.error('Failed -- using instant beat');
-                setPhase('booth');
-                setTimeout(startBeat, 200);
-              }
-            }}
-              disabled={!artistName.trim() || !songTitle.trim()}
-              className="w-full bg-purple-600/20 hover:bg-purple-600/30 disabled:opacity-30 text-purple-300 font-medium py-3 rounded-xl flex items-center justify-center gap-2 border border-purple-500/20 transition-all text-sm">
-              <Wand2 className="w-4 h-4" /> AI Full Song (vocals + beat)
-              <span className="text-[9px] text-purple-500 ml-1">requires Suno API</span>
+        {/* ═══ AI CREATING ═══ */}
+        {phase === 'creating' && (
+          <div className="h-full flex flex-col items-center justify-center">
+            <div className="w-24 h-24 rounded-full bg-teal-500/[0.06] flex items-center justify-center mb-8 relative">
+              <Loader2 className="w-12 h-12 text-teal-400/60 animate-spin" />
+              <div className="absolute inset-0 rounded-full border border-teal-500/10 animate-ping" style={{ animationDuration: '3s' }} />
+            </div>
+            <h2 className="text-xl font-semibold mb-2 text-white/90">Creating Your Beat</h2>
+            <p className="text-gray-500 text-sm mb-1">{genre} / {mood} / {bpm} BPM</p>
+            <p className="text-gray-700 text-xs">AI is composing -- this takes 2-3 minutes...</p>
+            <button onClick={() => { setPhase('booth'); setTimeout(startBeat, 200); toast.success('Switched to instant beat'); }}
+              className="mt-10 text-xs text-gray-600 hover:text-teal-400 transition-colors underline underline-offset-4">
+              Skip -- use instant beat instead
             </button>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* ═══ AI CREATING ═══ */}
-      {phase === 'creating' && (
-        <div className="relative z-10 text-center px-6">
-          <div className="w-20 h-20 rounded-full bg-teal-500/10 flex items-center justify-center mx-auto mb-6">
-            <Loader2 className="w-10 h-10 text-teal-400 animate-spin" />
-          </div>
-          <h2 className="text-2xl font-bold mb-2">Creating Your Beat</h2>
-          <p className="text-gray-500 text-sm mb-2">{genre} · {mood} · {bpm} BPM</p>
-          <p className="text-gray-700 text-xs">AI is composing -- this takes 2-3 minutes...</p>
-          <button onClick={() => { setPhase('booth'); setTimeout(startBeat, 200); toast.success('Switched to instant beat'); }}
-            className="mt-8 text-xs text-gray-600 hover:text-teal-400 transition-colors underline">
-            Skip -- use instant beat instead
-          </button>
-        </div>
-      )}
+        {/* ═══ THE BOOTH — fills workspace, visualizer dominant ═══ */}
+        {phase === 'booth' && (
+          <div className="h-full flex flex-col">
+            {/* Lyrics teleprompter — fixed at top if writing */}
+            {door === 'write' && lyrics && (
+              <div className="flex-shrink-0 mx-6 mt-3 max-h-16 overflow-auto bg-white/[0.015] rounded-lg px-4 py-2 border border-white/[0.04]">
+                <p className="text-sm text-gray-500 leading-relaxed whitespace-pre-wrap">{lyrics}</p>
+              </div>
+            )}
 
-      {/* ═══ THE BOOTH ═══ */}
-      {phase === 'booth' && (
-        <div className="relative z-10 w-full max-w-lg px-6 text-center">
-          <div className="mb-6">
-            <h2 className="text-2xl font-bold tracking-tight">{songTitle}</h2>
-            <p className="text-sm text-gray-600">{artistName}</p>
-          </div>
+            {/* Visualizer area — takes up ~60% */}
+            <div className="flex-1 flex items-center justify-center min-h-0 px-6 py-4">
+              <div className="flex items-center gap-6 h-full max-h-[500px]" style={{ aspectRatio: 'auto' }}>
+                {/* Left VU meter */}
+                <div className={`transition-opacity duration-300 flex-shrink-0 ${isRecording ? 'opacity-100' : 'opacity-20'}`}>
+                  <LevelMeter analyser={recordAnalyser} height={300} width={28} showDB={true} />
+                </div>
 
-          {/* Lyrics teleprompter */}
-          {door === 'write' && lyrics && (
-            <div className="mb-4 max-h-20 overflow-auto bg-white/[0.02] rounded-xl p-3 border border-white/5">
-              <p className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap">{lyrics}</p>
+                {/* Circular visualizer — large */}
+                <div className="relative flex-shrink-0" style={{ width: 'min(55vh, 400px)', height: 'min(55vh, 400px)' }}>
+                  <svg viewBox="0 0 200 200" className="w-full h-full">
+                    {vizData.map((v, i) => {
+                      const angle = (i / vizData.length) * Math.PI * 2 - Math.PI / 2;
+                      const innerR = 55;
+                      const outerR = innerR + v * 40;
+                      return (
+                        <line key={i}
+                          x1={100 + Math.cos(angle) * innerR} y1={100 + Math.sin(angle) * innerR}
+                          x2={100 + Math.cos(angle) * outerR} y2={100 + Math.sin(angle) * outerR}
+                          stroke={isRecording ? '#ef4444' : '#14b8a6'}
+                          strokeWidth={2.5} opacity={0.2 + v * 0.8} strokeLinecap="round"
+                        />
+                      );
+                    })}
+                    <circle cx={100} cy={100} r={50} fill="none" stroke={isRecording ? '#ef444430' : '#14b8a615'} strokeWidth={1} />
+                    <circle cx={100} cy={100} r={25} fill="none" stroke={isRecording ? '#ef444418' : '#14b8a60a'} strokeWidth={0.5} />
+                  </svg>
+                  {/* Center info */}
+                  <div className="absolute inset-0 flex flex-col items-center justify-center">
+                    {isRecording ? (
+                      <>
+                        <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse mb-3" />
+                        <span className="text-2xl font-mono text-red-400 font-bold tracking-wider">{formatTime(recordingTime)}</span>
+                        <span className="text-[10px] text-red-400/50 uppercase tracking-[0.2em] mt-1">Recording</span>
+                      </>
+                    ) : (
+                      <>
+                        <Mic className="w-8 h-8 text-teal-400/30 mb-2" />
+                        <span className="text-[10px] text-gray-600 uppercase tracking-[0.2em]">Ready</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Right VU meter */}
+                <div className={`transition-opacity duration-300 flex-shrink-0 ${isRecording ? 'opacity-100' : 'opacity-20'}`}>
+                  <LevelMeter analyser={recordAnalyser} height={300} width={28} showDB={true} />
+                </div>
+              </div>
             </div>
-          )}
 
-          {/* Circular visualizer + VU meters */}
-          <div className="flex items-center justify-center gap-4 mb-8">
-            <div className={`transition-opacity ${isRecording ? 'opacity-100' : 'opacity-30'}`}>
-              <LevelMeter analyser={recordAnalyser} height={200} width={20} showDB={true} />
-            </div>
-            <div className="relative w-64 h-64">
-              <svg viewBox="0 0 200 200" className="w-full h-full">
-                {vizData.map((v, i) => {
-                  const angle = (i / vizData.length) * Math.PI * 2 - Math.PI / 2;
-                  const innerR = 60;
-                  const outerR = innerR + v * 35;
-                  return (
-                    <line key={i}
-                      x1={100 + Math.cos(angle) * innerR} y1={100 + Math.sin(angle) * innerR}
-                      x2={100 + Math.cos(angle) * outerR} y2={100 + Math.sin(angle) * outerR}
-                      stroke={isRecording ? '#ef4444' : '#14b8a6'}
-                      strokeWidth={2} opacity={0.3 + v * 0.7} strokeLinecap="round"
-                    />
-                  );
-                })}
-                <circle cx={100} cy={100} r={55} fill="none" stroke={isRecording ? '#ef444440' : '#14b8a620'} strokeWidth={1} />
-                <circle cx={100} cy={100} r={30} fill="none" stroke={isRecording ? '#ef444420' : '#14b8a610'} strokeWidth={1} />
-              </svg>
-              <div className="absolute inset-0 flex flex-col items-center justify-center">
-                {isRecording ? (
+            {/* ─── Bottom dock — controls + presets ─── */}
+            <div className="flex-shrink-0 bg-black/40 backdrop-blur-md border-t border-white/[0.04] px-6 py-4">
+              {/* Transport controls */}
+              <div className="flex items-center justify-center gap-4 mb-4">
+                {!isRecording ? (
                   <>
-                    <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse mb-2" />
-                    <span className="text-2xl font-mono text-red-400 font-bold">{formatTime(recordingTime)}</span>
-                    <span className="text-[10px] text-red-400/60 uppercase tracking-widest">Recording</span>
+                    <button onClick={() => { if (isPlaying) stopBeat(); else startBeat(); }}
+                      className="w-11 h-11 rounded-full bg-white/[0.04] hover:bg-white/[0.08] flex items-center justify-center text-gray-400 hover:text-white transition-all">
+                      {isPlaying ? <Pause className="w-4.5 h-4.5" /> : <Play className="w-4.5 h-4.5 ml-0.5" />}
+                    </button>
+                    <button onClick={startRecording}
+                      className="w-16 h-16 rounded-full bg-red-600 hover:bg-red-500 flex items-center justify-center transition-all hover:scale-105 shadow-lg shadow-red-600/20 ring-2 ring-red-500/20 ring-offset-2 ring-offset-transparent">
+                      <Mic className="w-7 h-7 text-white" />
+                    </button>
+                    <button onClick={() => { stopAll(); startBeat(); }}
+                      className="w-11 h-11 rounded-full bg-white/[0.04] hover:bg-white/[0.08] flex items-center justify-center text-gray-400 hover:text-white transition-all"
+                      title="New beat">
+                      <RotateCcw className="w-4 h-4" />
+                    </button>
                   </>
                 ) : (
-                  <>
-                    <Mic className="w-8 h-8 text-teal-400/40 mb-2" />
-                    <span className="text-[10px] text-gray-600 uppercase tracking-widest">Ready</span>
-                  </>
+                  <button onClick={stopRecording}
+                    className="w-16 h-16 rounded-full bg-white/[0.06] hover:bg-white/[0.12] flex items-center justify-center transition-all border border-white/10">
+                    <Square className="w-7 h-7 text-white" />
+                  </button>
+                )}
+              </div>
+
+              {/* Preset pills — vocal + space */}
+              {!isRecording && (
+                <div className="space-y-2">
+                  <div className="flex gap-1.5 justify-center flex-wrap">
+                    {Object.entries(VOCAL_PRESETS).map(([key, p]) => (
+                      <button key={key} onClick={() => setVocalPreset(key)}
+                        className={`text-[11px] px-3.5 py-1.5 rounded-full transition-all duration-200 ${
+                          vocalPreset === key
+                            ? 'bg-teal-500/15 text-teal-400 border border-teal-500/25 shadow-sm shadow-teal-500/10'
+                            : 'bg-white/[0.03] text-gray-600 border border-transparent hover:text-gray-400 hover:bg-white/[0.05]'
+                        }`}>{p.name}</button>
+                    ))}
+                  </div>
+                  <div className="flex gap-1.5 justify-center">
+                    {Object.entries(SPACE_PRESETS).map(([key, p]) => (
+                      <button key={key} onClick={() => setSpacePreset(key)}
+                        className={`text-[11px] px-3.5 py-1.5 rounded-full transition-all duration-200 ${
+                          spacePreset === key
+                            ? 'bg-white/[0.08] text-white/80 border border-white/15'
+                            : 'bg-white/[0.03] text-gray-600 border border-transparent hover:text-gray-400 hover:bg-white/[0.05]'
+                        }`}>{p.label}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ═══ MIX — split layout ═══ */}
+        {phase === 'mix' && (
+          <div className="h-full flex">
+            {/* Left — visualizer / playback */}
+            <div className="flex-1 flex flex-col items-center justify-center border-r border-white/[0.04] px-8">
+              <div className="mb-6 text-center">
+                <h2 className="text-xl font-semibold text-white/90 tracking-tight">{songTitle}</h2>
+                <p className="text-xs text-gray-600 mt-1">{artistName}</p>
+                <div className="flex gap-2 justify-center mt-3">
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-white/[0.04] text-gray-500">{genre}</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-white/[0.04] text-gray-500">{bpm} BPM</span>
+                </div>
+              </div>
+
+              {/* Play button */}
+              <button onClick={isPlaying ? stopAll : playMix}
+                className={`w-20 h-20 rounded-full flex items-center justify-center mb-6 transition-all duration-300 hover:scale-105 ${
+                  isPlaying
+                    ? 'bg-white/[0.06] hover:bg-white/[0.10] shadow-lg shadow-teal-500/5 ring-1 ring-white/10'
+                    : 'bg-teal-600 hover:bg-teal-500 shadow-lg shadow-teal-600/20'
+                }`}>
+                {isPlaying ? <Pause className="w-8 h-8 text-white" /> : <Play className="w-8 h-8 text-white ml-1" />}
+              </button>
+
+              {isPlaying && (
+                <p className="text-[10px] text-teal-400/50 animate-pulse tracking-widest uppercase">Playing</p>
+              )}
+
+              {/* Action buttons */}
+              <div className="mt-8 w-full max-w-xs space-y-2">
+                <Button size="md" className="w-full" onClick={exportSong} loading={exporting}
+                  icon={exporting ? undefined : <Download className="w-4 h-4" />}>
+                  {exporting ? 'Mastering...' : 'Export Song'}
+                </Button>
+                <div className="flex gap-2">
+                  <Button variant="ghost" size="sm" className="flex-1" onClick={() => { stopAll(); setPhase('booth'); }}>
+                    Re-record
+                  </Button>
+                  <Button variant="ghost" size="sm" className="flex-1" onClick={reset}>
+                    Start Over
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            {/* Right — controls panel */}
+            <div className="w-80 flex-shrink-0 p-6 overflow-auto">
+              <h3 className="text-sm font-medium text-white/70 mb-5">Mix Controls</h3>
+
+              {/* Volume faders */}
+              <div className="space-y-5 mb-8">
+                <Slider label="Beat" value={beatVolume} suffix="%" onChange={v => {
+                  setBeatVolume(v);
+                  beatPlayerRef.current?.setVolume(v / 100);
+                }} />
+                <Slider label="Vocals" value={vocalVolume} suffix="%" onChange={v => {
+                  setVocalVolume(v);
+                  getAudioEngine().setTrackParam('vocals', 'volume', v);
+                }} />
+              </div>
+
+              {/* Vocal preset */}
+              <div className="mb-6">
+                <p className="text-xs text-gray-500 mb-2.5">Vocal Sound</p>
+                <div className="flex gap-1.5 flex-wrap">
+                  {Object.entries(VOCAL_PRESETS).map(([key, p]) => (
+                    <button key={key} onClick={() => {
+                      setVocalPreset(key);
+                      getAudioEngine().applyPreset('vocals', p);
+                    }}
+                      className={`text-[11px] px-3 py-1.5 rounded-full transition-all duration-200 ${
+                        vocalPreset === key
+                          ? 'bg-teal-500/15 text-teal-400 border border-teal-500/25 shadow-sm shadow-teal-500/10'
+                          : 'bg-white/[0.03] text-gray-600 border border-transparent hover:text-gray-400'
+                      }`}>{p.name}</button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Autotune */}
+              <div className="mb-6">
+                <p className="text-xs text-gray-500 mb-2.5">Auto-Tune</p>
+                <div className="flex gap-1.5 flex-wrap">
+                  {Object.entries(AUTOTUNE_PRESETS).map(([key, p]) => (
+                    <button key={key} onClick={() => setAutotunePreset(key)}
+                      className={`text-[11px] px-3 py-1.5 rounded-full transition-all duration-200 ${
+                        autotunePreset === key
+                          ? key === 'off'
+                            ? 'bg-white/[0.08] text-white/70 border border-white/15'
+                            : 'bg-purple-500/15 text-purple-400 border border-purple-500/25 shadow-sm shadow-purple-500/10'
+                          : 'bg-white/[0.03] text-gray-600 border border-transparent hover:text-gray-400'
+                      }`}>{p.label}</button>
+                  ))}
+                </div>
+                {autotunePreset !== 'off' && (
+                  <p className="text-[10px] text-gray-600 mt-2">{AUTOTUNE_PRESETS[autotunePreset]?.desc}</p>
                 )}
               </div>
             </div>
-            <div className={`transition-opacity ${isRecording ? 'opacity-100' : 'opacity-30'}`}>
-              <LevelMeter analyser={recordAnalyser} height={200} width={20} showDB={true} />
-            </div>
           </div>
+        )}
 
-          {/* Controls */}
-          <div className="flex items-center justify-center gap-4 mb-8">
-            {!isRecording ? (
-              <>
-                <button onClick={() => { if (isPlaying) stopBeat(); else startBeat(); }}
-                  className="w-12 h-12 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-gray-400 hover:text-white transition-colors">
-                  {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
-                </button>
-                <button onClick={startRecording}
-                  className="w-20 h-20 rounded-full bg-red-600 hover:bg-red-500 flex items-center justify-center transition-all hover:scale-105 shadow-lg shadow-red-600/20">
-                  <Mic className="w-8 h-8 text-white" />
-                </button>
-                <button onClick={() => { stopAll(); startBeat(); }}
-                  className="w-12 h-12 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-                  title="New beat">
-                  <RotateCcw className="w-5 h-5" />
-                </button>
-              </>
-            ) : (
-              <button onClick={stopRecording}
-                className="w-20 h-20 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-all">
-                <Square className="w-8 h-8 text-white" />
-              </button>
-            )}
-          </div>
+        {/* ═══ DONE — release card ═══ */}
+        {phase === 'done' && (
+          <div className="h-full flex items-center justify-center">
+            <div className="w-full max-w-sm">
+              {/* Release card */}
+              <div className="rounded-2xl border border-white/[0.06] bg-white/[0.015] overflow-hidden">
+                {/* Card header — accent strip */}
+                <div className="h-1 bg-gradient-to-r from-teal-500/40 via-teal-400/60 to-teal-500/40" />
 
-          {/* Vocal & space presets */}
-          {!isRecording && (
-            <div className="space-y-3">
-              <div className="flex gap-1.5 justify-center">
-                {Object.entries(VOCAL_PRESETS).map(([key, p]) => (
-                  <button key={key} onClick={() => setVocalPreset(key)}
-                    className={`text-[11px] px-3 py-1.5 rounded-full transition-all ${
-                      vocalPreset === key ? 'bg-teal-500/20 text-teal-400 border border-teal-500/30' : 'bg-white/5 text-gray-600 border border-transparent hover:text-white'
-                    }`}>{p.name}</button>
-                ))}
-              </div>
-              <div className="flex gap-1.5 justify-center">
-                {Object.entries(SPACE_PRESETS).map(([key, p]) => (
-                  <button key={key} onClick={() => setSpacePreset(key)}
-                    className={`text-[11px] px-3 py-1.5 rounded-full transition-all ${
-                      spacePreset === key ? 'bg-white/10 text-white border border-white/20' : 'bg-white/5 text-gray-600 border border-transparent hover:text-white'
-                    }`}>{p.label}</button>
-                ))}
+                <div className="p-8">
+                  <div className="w-12 h-12 rounded-full bg-teal-500/[0.08] flex items-center justify-center mx-auto mb-5">
+                    <Check className="w-6 h-6 text-teal-400" />
+                  </div>
+
+                  <div className="text-center mb-6">
+                    <h2 className="text-xl font-semibold text-white/90 mb-1">{songTitle}</h2>
+                    <p className="text-sm text-gray-500">by {artistName}</p>
+                  </div>
+
+                  <div className="rounded-xl bg-black/20 p-4 mb-6">
+                    <div className="grid grid-cols-2 gap-y-2.5 text-sm">
+                      <span className="text-gray-600 text-xs">Genre</span><span className="text-gray-400 text-xs">{genre} / {mood}</span>
+                      <span className="text-gray-600 text-xs">Tempo</span><span className="text-gray-400 text-xs">{bpm} BPM</span>
+                      <span className="text-gray-600 text-xs">Format</span><span className="text-gray-400 text-xs">MP3 320kbps, Mastered</span>
+                      <span className="text-gray-600 text-xs">Date</span><span className="text-gray-400 text-xs">{new Date().toLocaleDateString()}</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    {exportUrl && (
+                      <a href={exportUrl} download={`${artistName} - ${songTitle}.mp3`}
+                        className="w-full py-3 bg-teal-600 hover:bg-teal-500 rounded-xl text-sm font-medium flex items-center justify-center gap-2 transition-colors">
+                        <Download className="w-4 h-4" /> Download
+                      </a>
+                    )}
+                    <Button variant="secondary" size="md" className="w-full" onClick={reset}>
+                      New Session
+                    </Button>
+                  </div>
+                </div>
               </div>
             </div>
-          )}
-        </div>
-      )}
-
-      {/* ═══ MIX ═══ */}
-      {phase === 'mix' && (
-        <div className="relative z-10 w-full max-w-lg px-6 text-center">
-          <h2 className="text-3xl font-bold mb-1 tracking-tight">{songTitle}</h2>
-          <p className="text-sm text-gray-600 mb-2">{artistName}</p>
-          <div className="flex gap-2 justify-center mb-8">
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-gray-500">{genre}</span>
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-gray-500">{bpm} BPM</span>
           </div>
-
-          {/* Big play button */}
-          <button onClick={isPlaying ? stopAll : playMix}
-            className={`w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-8 transition-all hover:scale-105 ${
-              isPlaying
-                ? 'bg-white/10 hover:bg-white/20 shadow-lg shadow-teal-500/10'
-                : 'bg-teal-600 hover:bg-teal-700 shadow-lg shadow-teal-600/20'
-            }`}>
-            {isPlaying ? <Pause className="w-10 h-10 text-white" /> : <Play className="w-10 h-10 text-white ml-1" />}
-          </button>
-
-          {isPlaying && (
-            <p className="text-xs text-teal-400/60 mb-6 animate-pulse">Playing your mix...</p>
-          )}
-
-          {/* Volume controls */}
-          <Card className="mb-8 space-y-5">
-            <Slider label="Beat" value={beatVolume} suffix="%" onChange={v => {
-              setBeatVolume(v);
-              beatPlayerRef.current?.setVolume(v / 100);
-            }} />
-            <Slider label="Vocals" value={vocalVolume} suffix="%" onChange={v => {
-              setVocalVolume(v);
-              getAudioEngine().setTrackParam('vocals', 'volume', v);
-            }} />
-
-            {/* Vocal preset in mix */}
-            <div>
-              <p className="text-xs text-gray-500 mb-2">Vocal Sound</p>
-              <div className="flex gap-1.5 justify-center flex-wrap">
-                {Object.entries(VOCAL_PRESETS).map(([key, p]) => (
-                  <button key={key} onClick={() => {
-                    setVocalPreset(key);
-                    getAudioEngine().applyPreset('vocals', p);
-                  }}
-                    className={`text-xs px-3 py-1.5 rounded-full transition-all ${
-                      vocalPreset === key ? 'bg-teal-500/20 text-teal-400 border border-teal-500/30' : 'bg-white/5 text-gray-600 border border-transparent'
-                    }`}>{p.name}</button>
-                ))}
-              </div>
-            </div>
-
-            {/* Autotune */}
-            <div>
-              <p className="text-xs text-gray-500 mb-2">Auto-Tune</p>
-              <div className="flex gap-1.5 justify-center flex-wrap">
-                {Object.entries(AUTOTUNE_PRESETS).map(([key, p]) => (
-                  <button key={key} onClick={() => setAutotunePreset(key)}
-                    className={`text-xs px-3 py-1.5 rounded-full transition-all ${
-                      autotunePreset === key
-                        ? key === 'off' ? 'bg-white/10 text-white border border-white/20' : 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
-                        : 'bg-white/5 text-gray-600 border border-transparent'
-                    }`}>{p.label}</button>
-                ))}
-              </div>
-              {autotunePreset !== 'off' && (
-                <p className="text-[10px] text-gray-600 mt-1 text-center">{AUTOTUNE_PRESETS[autotunePreset]?.desc}</p>
-              )}
-            </div>
-          </Card>
-
-          {/* Action buttons */}
-          <div className="space-y-3">
-            <Button size="lg" className="w-full" onClick={exportSong} loading={exporting}
-              icon={exporting ? undefined : <Download className="w-5 h-5" />}>
-              {exporting ? 'Mastering...' : 'Export Song'}
-            </Button>
-
-            <div className="flex gap-3">
-              <Button variant="secondary" size="md" className="flex-1" onClick={() => { stopAll(); setPhase('booth'); }}>
-                Re-record
-              </Button>
-              <Button variant="secondary" size="md" className="flex-1" onClick={reset}>
-                Start Over
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ═══ DONE ═══ */}
-      {phase === 'done' && (
-        <div className="relative z-10 w-full max-w-md px-6 text-center">
-          <div className="w-16 h-16 rounded-full bg-teal-500/10 flex items-center justify-center mx-auto mb-6">
-            <Check className="w-8 h-8 text-teal-400" />
-          </div>
-
-          <h2 className="text-2xl font-bold mb-1">{songTitle}</h2>
-          <p className="text-gray-500 text-sm mb-6">by {artistName}</p>
-
-          <Card className="mb-6 text-left">
-            <div className="grid grid-cols-2 gap-y-2 text-sm">
-              <span className="text-gray-600">Genre</span><span className="text-gray-300">{genre} · {mood}</span>
-              <span className="text-gray-600">Tempo</span><span className="text-gray-300">{bpm} BPM</span>
-              <span className="text-gray-600">Format</span><span className="text-gray-300">MP3 320kbps, Mastered</span>
-              <span className="text-gray-600">Created</span><span className="text-gray-300">{new Date().toLocaleDateString()}</span>
-            </div>
-          </Card>
-
-          <div className="flex gap-3">
-            {exportUrl && (
-              <a href={exportUrl} download={`${artistName} - ${songTitle}.mp3`}
-                className="flex-1 py-3 bg-teal-600 hover:bg-teal-700 rounded-xl text-sm font-medium flex items-center justify-center gap-2">
-                <Download className="w-4 h-4" /> Download
-              </a>
-            )}
-            <Button variant="secondary" size="md" className="flex-1" onClick={reset}>
-              New Session
-            </Button>
-          </div>
-        </div>
-      )}
+        )}
       </div>
     </div>
   );
