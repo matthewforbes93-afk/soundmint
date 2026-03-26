@@ -3,32 +3,30 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Mic, Play, Pause, Square, Download, Check, ChevronRight,
-  PenTool, Radio, Grid3X3, Loader2, RotateCcw, Zap, X, Wand2
+  PenTool, Radio, Grid3X3, Loader2, RotateCcw, Zap, X, Wand2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { getAudioEngine, VOCAL_PRESETS, type VocalPreset } from '@/lib/audio-engine';
+import { useSoundMintStore } from '@/lib/store';
+import { saveProject } from '@/lib/project';
 import { BeatPlayer, type BeatConfig } from '@/lib/beatFactory';
 import LevelMeter from '@/components/LevelMeter';
+import Button from '@/components/ui/Button';
+import Input from '@/components/ui/Input';
+import Card from '@/components/ui/Card';
+import Slider from '@/components/ui/Slider';
 
 // ─── Types ───
 type Door = null | 'write' | 'record' | 'build';
 type Phase = 'doors' | 'setup' | 'creating' | 'booth' | 'mix' | 'done';
 
-const VOCAL_PRESETS: Record<string, { label: string; eq: [number, number, number]; reverb: number; comp: number }> = {
-  raw:       { label: 'Raw',       eq: [0, 0, 0],    reverb: 0,   comp: 0 },
-  warm:      { label: 'Warm',      eq: [3, 0, -2],   reverb: 15,  comp: 40 },
-  airy:      { label: 'Airy',      eq: [-2, 2, 4],   reverb: 30,  comp: 20 },
-  dark:      { label: 'Dark',      eq: [4, -1, -4],  reverb: 20,  comp: 50 },
-  radio:     { label: 'Radio',     eq: [1, 3, 2],    reverb: 10,  comp: 70 },
-  intimate:  { label: 'Intimate',  eq: [2, 1, -1],   reverb: 25,  comp: 30 },
-};
-
 const AUTOTUNE_PRESETS: Record<string, { label: string; desc: string; speed: number; detune: number; chorusDepth: number }> = {
-  off:       { label: 'Off',        desc: 'No pitch correction',              speed: 0,    detune: 0,   chorusDepth: 0 },
-  subtle:    { label: 'Subtle',     desc: 'Light correction, natural feel',   speed: 0.3,  detune: 5,   chorusDepth: 0.1 },
-  modern:    { label: 'Modern',     desc: 'Pop/R&B standard correction',      speed: 0.6,  detune: 10,  chorusDepth: 0.2 },
-  hard:      { label: 'Hard',       desc: 'T-Pain / Future style snap',       speed: 1.0,  detune: 15,  chorusDepth: 0.3 },
-  robot:     { label: 'Robot',      desc: 'Extreme effect, Daft Punk vibes',  speed: 1.0,  detune: 25,  chorusDepth: 0.5 },
-  harmony:   { label: 'Harmony',    desc: 'Adds a 3rd and 5th above',        speed: 0.5,  detune: 0,   chorusDepth: 0.4 },
+  off:     { label: 'Off',     desc: 'No pitch correction',            speed: 0,   detune: 0,  chorusDepth: 0 },
+  subtle:  { label: 'Subtle',  desc: 'Light correction, natural feel', speed: 0.3, detune: 5,  chorusDepth: 0.1 },
+  modern:  { label: 'Modern',  desc: 'Pop/R&B standard correction',    speed: 0.6, detune: 10, chorusDepth: 0.2 },
+  hard:    { label: 'Hard',    desc: 'T-Pain / Future style snap',     speed: 1.0, detune: 15, chorusDepth: 0.3 },
+  robot:   { label: 'Robot',   desc: 'Extreme effect, Daft Punk vibes', speed: 1.0, detune: 25, chorusDepth: 0.5 },
+  harmony: { label: 'Harmony', desc: 'Adds a 3rd and 5th above',      speed: 0.5, detune: 0,  chorusDepth: 0.4 },
 };
 
 const SPACE_PRESETS: Record<string, { label: string; reverb: number }> = {
@@ -67,38 +65,23 @@ function detectFromTitle(title: string): { genre: string; mood: string; bpm: num
   return { genre, mood, bpm: bpmMap[genre] || 90 };
 }
 
-// WAV encoder
-function encodeWav(buffer: AudioBuffer): ArrayBuffer {
-  const ch = buffer.numberOfChannels, sr = buffer.sampleRate, len = buffer.length * ch * 2 + 44;
-  const out = new ArrayBuffer(len), v = new DataView(out);
-  const ws = (o: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
-  ws(0,'RIFF'); v.setUint32(4,len-8,true); ws(8,'WAVE'); ws(12,'fmt ');
-  v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,ch,true);
-  v.setUint32(24,sr,true); v.setUint32(28,sr*ch*2,true); v.setUint16(32,ch*2,true);
-  v.setUint16(34,16,true); ws(36,'data'); v.setUint32(40,len-44,true);
-  let off = 44;
-  for (let i = 0; i < buffer.length; i++) for (let c = 0; c < ch; c++) {
-    v.setInt16(off, Math.max(-1, Math.min(1, buffer.getChannelData(c)[i])) * 0x7FFF, true); off += 2;
-  }
-  return out;
-}
+function formatTime(s: number) { return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
 
 // ═══════════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════════
 export default function SessionPage() {
+  // ─── Store (project data) ───
+  const { project, newProject, updateProject } = useSoundMintStore();
+
+  // ─── Local UI state ───
   const [door, setDoor] = useState<Door>(null);
   const [phase, setPhase] = useState<Phase>('doors');
   const [artistName, setArtistName] = useState('');
   const [songTitle, setSongTitle] = useState('');
-  const [genre, setGenre] = useState('hip-hop');
-  const [mood, setMood] = useState('chill');
-  const [bpm, setBpm] = useState(90);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
-  const [vocalPreset, setVocalPreset] = useState('warm');
-  const [spacePreset, setSpacePreset] = useState('room');
   const [beatVolume, setBeatVolume] = useState(70);
   const [vocalVolume, setVocalVolume] = useState(100);
   const [beatUrl, setBeatUrl] = useState<string | null>(null);
@@ -107,34 +90,44 @@ export default function SessionPage() {
   const [exporting, setExporting] = useState(false);
   const [vizData, setVizData] = useState<number[]>(new Array(64).fill(0));
   const [lyrics, setLyrics] = useState('');
+  const [vocalPreset, setVocalPreset] = useState('warm');
   const [autotunePreset, setAutotunePreset] = useState('off');
-  const vocalChainRef = useRef<{ ctx: AudioContext; source: MediaElementAudioSourceNode } | null>(null);
+  const [spacePreset, setSpacePreset] = useState('room');
 
+  // ─── Refs ───
   const beatPlayerRef = useRef<BeatPlayer | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const analyserRef = useRef<AnalyserNode | null>(null);
   const animRef = useRef(0);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const vocalAudioRef = useRef<HTMLAudioElement>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Title change → auto detect
+  // Derived from store or local
+  const genre = project?.genre || 'hip-hop';
+  const mood = project?.mood || 'chill';
+  const bpm = project?.bpm || 90;
+
+  // Title change => auto detect + update store
   function handleTitle(t: string) {
     setSongTitle(t);
     if (t.length > 2) {
       const d = detectFromTitle(t);
-      setGenre(d.genre); setMood(d.mood); setBpm(d.bpm);
+      updateProject({ genre: d.genre, mood: d.mood, bpm: d.bpm });
     }
   }
 
-  // Start beat — AI audio or instant synthesis
+  // Ensure project exists in store when entering setup
+  function ensureProject() {
+    if (!project) {
+      newProject(songTitle || 'Untitled', artistName || 'Unknown');
+    } else {
+      updateProject({ title: songTitle, artist: artistName });
+    }
+  }
+
+  // ─── Beat Control ───
   function startBeat() {
     if (beatUrl) {
-      // Play AI-generated beat
       const el = document.getElementById('aiBeatAudio') as HTMLAudioElement | null;
       if (el) { el.volume = beatVolume / 100; el.currentTime = 0; el.play(); }
     } else {
-      // Instant synthesis
       beatPlayerRef.current?.destroy();
       const keys = ['C','D','E','F','G','A'];
       beatPlayerRef.current = new BeatPlayer({ genre, mood, bpm, key: keys[Math.floor(Math.random() * keys.length)] });
@@ -154,132 +147,79 @@ export default function SessionPage() {
     setIsPlaying(false);
   }
 
-  // Start recording
+  // ─── Recording (through AudioEngine) ───
   async function startRecording() {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const ctx = new AudioContext();
-      const source = ctx.createMediaStreamSource(stream);
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 128;
-      source.connect(analyser);
-      analyserRef.current = analyser;
-
-      // ═══ LIVE MONITORING — hear yourself with effects while recording ═══
+      const engine = getAudioEngine();
       const preset = VOCAL_PRESETS[vocalPreset] || VOCAL_PRESETS.raw;
-      const tune = AUTOTUNE_PRESETS[autotunePreset] || AUTOTUNE_PRESETS.off;
+      const ok = await engine.startRecording(preset);
+      if (!ok) { toast.error('Mic access denied'); return; }
 
-      // Build live monitoring chain: mic → EQ → comp → gain → effects → output
-      const monEqLow = ctx.createBiquadFilter(); monEqLow.type = 'lowshelf'; monEqLow.frequency.value = 300; monEqLow.gain.value = preset.eq[0];
-      const monEqMid = ctx.createBiquadFilter(); monEqMid.type = 'peaking'; monEqMid.frequency.value = 1500; monEqMid.Q.value = 1; monEqMid.gain.value = preset.eq[1];
-      const monEqHigh = ctx.createBiquadFilter(); monEqHigh.type = 'highshelf'; monEqHigh.frequency.value = 4000; monEqHigh.gain.value = preset.eq[2];
-      const monComp = ctx.createDynamicsCompressor();
-      monComp.threshold.value = -24 + (preset.comp / 100) * 20; monComp.ratio.value = 4;
-      const monGain = ctx.createGain(); monGain.gain.value = 0.8;
-
-      source.connect(monEqLow); monEqLow.connect(monEqMid); monEqMid.connect(monEqHigh);
-      monEqHigh.connect(monComp); monComp.connect(monGain);
-
-      // Add autotune to monitoring
-      if (tune.speed > 0) {
-        const dryG = ctx.createGain(); dryG.gain.value = 1 - tune.chorusDepth * 0.4;
-        monGain.connect(dryG); dryG.connect(ctx.destination);
-        [tune.detune, -tune.detune].forEach(cents => {
-          const del = ctx.createDelay(); del.delayTime.value = 0.003;
-          const sG = ctx.createGain(); sG.gain.value = tune.chorusDepth;
-          const lfo = ctx.createOscillator(); const lfoG = ctx.createGain();
-          lfo.frequency.value = 0.5 + tune.speed * 3; lfoG.gain.value = cents / 12000;
-          lfo.connect(lfoG); lfoG.connect(del.delayTime); lfo.start();
-          monGain.connect(del); del.connect(sG); sG.connect(ctx.destination);
-        });
-      } else {
-        monGain.connect(ctx.destination);
-      }
-
-      // Reverb on monitoring
-      if (preset.reverb > 0) {
-        const rG = ctx.createGain(); rG.gain.value = preset.reverb / 150;
-        const d1 = ctx.createDelay(); d1.delayTime.value = 0.02;
-        const d2 = ctx.createDelay(); d2.delayTime.value = 0.04;
-        const fb = ctx.createGain(); fb.gain.value = 0.2;
-        monGain.connect(d1); d1.connect(d2); d2.connect(fb); fb.connect(d1);
-        d1.connect(rG); d2.connect(rG); rG.connect(ctx.destination);
-      }
-
-      // Start visualizer
+      // Start visualizer from engine's record analyser
       const vizTick = () => {
-        const data = new Uint8Array(analyser.frequencyBinCount);
-        analyser.getByteFrequencyData(data);
-        setVizData(Array.from(data).map(v => v / 255));
+        const analyser = engine.getRecordAnalyser();
+        if (analyser) {
+          const data = new Uint8Array(analyser.frequencyBinCount);
+          analyser.getByteFrequencyData(data);
+          setVizData(Array.from(data).map(v => v / 255));
+        }
         animRef.current = requestAnimationFrame(vizTick);
       };
       animRef.current = requestAnimationFrame(vizTick);
 
-      const recorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = recorder;
-      chunksRef.current = [];
-      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-      recorder.onstop = async () => {
-        cancelAnimationFrame(animRef.current);
-        stream.getTracks().forEach(t => t.stop());
-        setVizData(new Array(64).fill(0));
-        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-        if (blob.size < 500) { toast.error('Recording too short'); return; }
-
-        toast.success('Processing recording...');
-
-        // Try WAV conversion, fall back to raw WebM upload
-        let file: File;
-        try {
-          const convCtx = new AudioContext();
-          const arrBuf = await blob.arrayBuffer();
-          const audioBuf = await convCtx.decodeAudioData(arrBuf);
-          const wavBuf = encodeWav(audioBuf);
-          file = new File([wavBuf], `vocal-${Date.now()}.wav`, { type: 'audio/wav' });
-          convCtx.close();
-        } catch (e) {
-          console.error('WAV conversion failed, uploading WebM:', e);
-          file = new File([blob], `vocal-${Date.now()}.webm`, { type: 'audio/webm' });
-        }
-
-        try {
-          const formData = new FormData();
-          formData.append('file', file);
-          formData.append('title', `${songTitle} - Vocals`);
-          const res = await fetch('/api/upload', { method: 'POST', body: formData });
-          const data = await res.json();
-          if (res.ok && data.audio_url) {
-            setVocalUrl(data.audio_url);
-            toast.success('Recording ready — hit Play to listen');
-            setPhase('mix');
-          } else {
-            console.error('Upload failed:', data);
-            toast.error('Upload failed — try again');
-          }
-        } catch (e) {
-          console.error('Upload error:', e);
-          toast.error('Upload failed');
-        }
-      };
-
-      // Start beat + recording
+      // Start beat + recording timer
       startBeat();
-      recorder.start(100);
       setIsRecording(true);
       setRecordingTime(0);
       timerRef.current = setInterval(() => setRecordingTime(t => t + 1), 1000);
     } catch { toast.error('Mic access denied'); }
   }
 
-  function stopRecording() {
-    mediaRecorderRef.current?.stop();
+  async function stopRecording() {
+    const engine = getAudioEngine();
+    const audioBuf = await engine.stopRecording();
     stopBeat();
     setIsRecording(false);
+    cancelAnimationFrame(animRef.current);
+    setVizData(new Array(64).fill(0));
     if (timerRef.current) clearInterval(timerRef.current);
+
+    if (!audioBuf) { toast.error('Recording too short'); return; }
+
+    toast.success('Processing recording...');
+
+    // Encode to WAV via engine, upload
+    let file: File;
+    try {
+      const wavBuf = engine.encodeWav(audioBuf);
+      file = new File([wavBuf], `vocal-${Date.now()}.wav`, { type: 'audio/wav' });
+    } catch {
+      toast.error('WAV conversion failed');
+      return;
+    }
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('title', `${songTitle} - Vocals`);
+      const res = await fetch('/api/upload', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (res.ok && data.audio_url) {
+        setVocalUrl(data.audio_url);
+        toast.success('Recording ready -- hit Play to listen');
+        setPhase('mix');
+      } else {
+        toast.error('Upload failed -- try again');
+      }
+    } catch {
+      toast.error('Upload failed');
+    }
   }
 
-  // Mix playback
+  // ─── Mix Playback (through AudioEngine) ───
   function playMix() {
+    const engine = getAudioEngine();
+
     // Play beat
     if (beatUrl) {
       const el = document.getElementById('aiBeatAudio') as HTMLAudioElement | null;
@@ -293,67 +233,31 @@ export default function SessionPage() {
       beatPlayerRef.current.start();
     }
 
-    // Play vocals through effects chain
-    if (vocalAudioRef.current && vocalUrl) {
-      // Create source node ONCE (can't call createMediaElementSource twice)
-      if (!vocalChainRef.current) {
-        try {
-          const ctx = new AudioContext();
-          const source = ctx.createMediaElementSource(vocalAudioRef.current);
-          vocalChainRef.current = { ctx, source };
-        } catch {
-          // Already created — just play direct
-          vocalAudioRef.current.volume = vocalVolume / 100;
-          vocalAudioRef.current.currentTime = 0;
-          vocalAudioRef.current.play().catch(() => {});
-          setIsPlaying(true);
-          return;
-        }
-      }
-
-      const { ctx, source } = vocalChainRef.current;
-      try { source.disconnect(); } catch {/* ok */}
-
+    // Play vocals through engine track
+    if (vocalUrl) {
       const preset = VOCAL_PRESETS[vocalPreset] || VOCAL_PRESETS.raw;
-
-      // Build chain: source → EQ → comp → gain → dest
-      const eqL = ctx.createBiquadFilter(); eqL.type = 'lowshelf'; eqL.frequency.value = 300; eqL.gain.value = preset.eq[0];
-      const eqM = ctx.createBiquadFilter(); eqM.type = 'peaking'; eqM.frequency.value = 1500; eqM.Q.value = 1; eqM.gain.value = preset.eq[1];
-      const eqH = ctx.createBiquadFilter(); eqH.type = 'highshelf'; eqH.frequency.value = 4000; eqH.gain.value = preset.eq[2];
-      const comp = ctx.createDynamicsCompressor();
-      comp.threshold.value = -24 + (preset.comp / 100) * 20; comp.ratio.value = 4;
-      const gain = ctx.createGain(); gain.gain.value = vocalVolume / 100;
-
-      source.connect(eqL); eqL.connect(eqM); eqM.connect(eqH); eqH.connect(comp); comp.connect(gain);
-
-      // Reverb
-      if (preset.reverb > 0) {
-        const rG = ctx.createGain(); rG.gain.value = preset.reverb / 150;
-        const d1 = ctx.createDelay(); d1.delayTime.value = 0.02;
-        const d2 = ctx.createDelay(); d2.delayTime.value = 0.04;
-        const fb = ctx.createGain(); fb.gain.value = 0.2;
-        gain.connect(d1); d1.connect(d2); d2.connect(fb); fb.connect(d1);
-        d1.connect(rG); d2.connect(rG); rG.connect(ctx.destination);
-      }
-
-      gain.connect(ctx.destination);
-      vocalAudioRef.current.currentTime = 0;
-      vocalAudioRef.current.play().catch(() => {});
+      engine.loadAudio('vocals', vocalUrl).then(ok => {
+        if (ok) {
+          engine.applyPreset('vocals', preset);
+          engine.setTrackParam('vocals', 'volume', vocalVolume);
+          engine.playTrack('vocals', 0, false);
+        }
+      });
     }
+
     setIsPlaying(true);
   }
 
   function stopAll() {
-    // Stop beat (both types)
+    const engine = getAudioEngine();
+    engine.stopAll();
     beatPlayerRef.current?.stop();
     const aiBeat = document.getElementById('aiBeatAudio') as HTMLAudioElement | null;
     if (aiBeat) aiBeat.pause();
-    // Stop vocals
-    if (vocalAudioRef.current) vocalAudioRef.current.pause();
     setIsPlaying(false);
   }
 
-  // Export
+  // ─── Export ───
   async function exportSong() {
     setExporting(true);
     try {
@@ -370,32 +274,47 @@ export default function SessionPage() {
     setExporting(false);
   }
 
-  function formatTime(s: number) { return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`; }
-
+  // ─── Save ───
   async function saveSession() {
-    try {
-      const res = await fetch('/api/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ artistName, songTitle, genre, mood, bpm, beatUrl, vocalUrl, vocalPreset, autotunePreset, beatVolume, vocalVolume, lyrics, door }),
+    ensureProject();
+    if (project) {
+      updateProject({
+        session: { door: door || 'record', vocalPreset, autotunePreset, spacePreset, lyrics },
       });
-      if (res.ok) toast.success('Session saved');
-      else toast.error('Save failed');
-    } catch { toast.error('Save failed'); }
+      try {
+        await saveProject({ ...project, title: songTitle, artist: artistName });
+        toast.success('Session saved');
+      } catch { toast.error('Save failed'); }
+    } else {
+      // Fallback: raw API save
+      try {
+        const res = await fetch('/api/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ artistName, songTitle, genre, mood, bpm, beatUrl, vocalUrl, vocalPreset, autotunePreset, beatVolume, vocalVolume, lyrics, door }),
+        });
+        if (res.ok) toast.success('Session saved');
+        else toast.error('Save failed');
+      } catch { toast.error('Save failed'); }
+    }
   }
 
   function reset() {
     stopAll();
     setDoor(null); setPhase('doors'); setVocalUrl(null); setExportUrl(null);
-    setSongTitle(''); setRecordingTime(0);
+    setSongTitle(''); setRecordingTime(0); setLyrics('');
   }
 
-  // Cleanup
+  // ─── Cleanup ───
   useEffect(() => () => {
     cancelAnimationFrame(animRef.current);
     if (timerRef.current) clearInterval(timerRef.current);
     beatPlayerRef.current?.destroy();
   }, []);
+
+  // Get engine analysers for LevelMeter
+  const engine = typeof window !== 'undefined' ? getAudioEngine() : null;
+  const recordAnalyser = engine?.getRecordAnalyser() ?? null;
 
   // ═══ RENDER ═══
   return (
@@ -407,7 +326,7 @@ export default function SessionPage() {
         } blur-3xl`} />
       </div>
 
-      {/* ═══ TOP BAR — always visible except doors ═══ */}
+      {/* ═══ TOP BAR ═══ */}
       {phase !== 'doors' && (
         <div className="relative z-20 h-12 flex items-center justify-between px-4 border-b border-white/5 flex-shrink-0">
           <button onClick={() => {
@@ -434,17 +353,12 @@ export default function SessionPage() {
 
           <div className="flex items-center gap-2">
             {songTitle && phase !== 'setup' && (
-              <button onClick={saveSession}
-                className="text-xs px-3 py-1 bg-white/5 hover:bg-white/10 rounded-lg text-gray-400 border border-white/10">
-                Save
-              </button>
+              <Button variant="secondary" size="sm" onClick={saveSession}>Save</Button>
             )}
             {vocalUrl && phase !== 'done' && (
-              <button onClick={exportSong} disabled={exporting}
-                className="text-xs px-3 py-1 bg-teal-600 hover:bg-teal-700 rounded-lg text-white flex items-center gap-1">
-                {exporting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+              <Button size="sm" onClick={exportSong} loading={exporting} icon={<Download className="w-3 h-3" />}>
                 Export
-              </button>
+              </Button>
             )}
             <button onClick={reset} className="text-gray-700 hover:text-white">
               <X className="w-4 h-4" />
@@ -453,17 +367,15 @@ export default function SessionPage() {
         </div>
       )}
 
-      {/* Global audio elements — always mounted */}
-      {vocalUrl && <audio ref={vocalAudioRef} src={vocalUrl} crossOrigin="anonymous" />}
+      {/* Global audio for AI beat */}
       {beatUrl && <audio id="aiBeatAudio" src={beatUrl} loop crossOrigin="anonymous" />}
 
-      {/* ═══ MAIN CONTENT — fills remaining space ═══ */}
+      {/* ═══ MAIN CONTENT ═══ */}
       <div className="flex-1 flex items-center justify-center overflow-auto">
 
       {/* ═══ DOOR SELECT ═══ */}
       {phase === 'doors' && (
         <div className="relative z-10 text-center max-w-2xl px-6">
-          {/* Back to home */}
           <a href="/" className="absolute top-0 left-6 flex items-center gap-2 text-gray-400 hover:text-teal-400 transition-colors text-sm bg-white/5 px-3 py-1.5 rounded-lg border border-white/10 hover:border-teal-500/30">
             <ChevronRight className="w-4 h-4 rotate-180" /> Home
           </a>
@@ -474,13 +386,13 @@ export default function SessionPage() {
           <p className="text-gray-600 text-sm mb-12">What do you want to make?</p>
 
           <div className="grid grid-cols-3 gap-4">
-            {[
-              { id: 'write' as Door, icon: PenTool, label: 'Write', desc: 'Start with lyrics or a melody', glow: 'hover:shadow-teal-500/10' },
-              { id: 'record' as Door, icon: Mic, label: 'Record', desc: 'Step up to the mic', glow: 'hover:shadow-teal-500/10' },
-              { id: 'build' as Door, icon: Grid3X3, label: 'Build', desc: 'Construct a beat from scratch', glow: 'hover:shadow-teal-500/10' },
-            ].map(({ id, icon: Icon, label, desc, glow }) => (
+            {([
+              { id: 'write' as Door, icon: PenTool, label: 'Write', desc: 'Start with lyrics or a melody' },
+              { id: 'record' as Door, icon: Mic, label: 'Record', desc: 'Step up to the mic' },
+              { id: 'build' as Door, icon: Grid3X3, label: 'Build', desc: 'Construct a beat from scratch' },
+            ]).map(({ id, icon: Icon, label, desc }) => (
               <button key={id} onClick={() => { setDoor(id); setPhase('setup'); }}
-                className={`group p-8 rounded-2xl border border-white/5 bg-white/[0.02] hover:bg-white/[0.04] hover:border-teal-500/20 transition-all hover:scale-[1.02] ${glow} hover:shadow-2xl`}>
+                className="group p-8 rounded-2xl border border-white/5 bg-white/[0.02] hover:bg-white/[0.04] hover:border-teal-500/20 transition-all hover:scale-[1.02] hover:shadow-teal-500/10 hover:shadow-2xl">
                 <div className="w-14 h-14 rounded-2xl bg-teal-500/10 flex items-center justify-center mx-auto mb-4 group-hover:bg-teal-500/20 transition-colors">
                   <Icon className="w-6 h-6 text-teal-400" />
                 </div>
@@ -509,13 +421,20 @@ export default function SessionPage() {
           </div>
 
           <div className="space-y-4">
-            <input type="text" value={artistName} onChange={e => setArtistName(e.target.value)}
-              placeholder="Artist name" autoFocus
-              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3.5 text-white placeholder:text-gray-700 focus:outline-none focus:border-teal-500/50 text-center text-lg" />
+            <Input
+              value={artistName}
+              onChange={e => setArtistName(e.target.value)}
+              placeholder="Artist name"
+              autoFocus
+              className="text-center text-lg"
+            />
 
-            <input type="text" value={songTitle} onChange={e => handleTitle(e.target.value)}
+            <Input
+              value={songTitle}
+              onChange={e => handleTitle(e.target.value)}
               placeholder="Song title"
-              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3.5 text-white placeholder:text-gray-700 focus:outline-none focus:border-teal-500/50 text-center text-lg" />
+              className="text-center text-lg"
+            />
 
             {songTitle.length > 2 && (
               <div className="flex gap-2 justify-center">
@@ -533,71 +452,70 @@ export default function SessionPage() {
             )}
 
             <div className="flex gap-3">
-            <button onClick={async () => {
-              if (!artistName.trim() || !songTitle.trim()) return toast.error('Enter name and title');
-              if (door === 'build') { window.location.href = '/studio'; return; }
-              try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                stream.getTracks().forEach(t => t.stop());
-              } catch { toast.error('Mic access needed to record'); return; }
-              setPhase('booth');
-              setTimeout(startBeat, 200);
-            }}
-              disabled={!artistName.trim() || !songTitle.trim()}
-              className="flex-1 bg-teal-600 hover:bg-teal-700 disabled:opacity-30 text-white font-medium py-4 rounded-xl flex items-center justify-center gap-2 text-lg transition-all">
-              <Zap className="w-5 h-5" /> Instant Beat
-            </button>
-            <button onClick={async () => {
-              if (!artistName.trim() || !songTitle.trim()) return toast.error('Enter name and title');
-              // Request mic early
-              try {
-                const s = await navigator.mediaDevices.getUserMedia({ audio: true });
-                s.getTracks().forEach(t => t.stop());
-              } catch { toast.error('Mic access needed'); return; }
-              // Generate AI beat
-              setPhase('creating');
-              try {
-                const res = await fetch('/api/tracks', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ genre, mood, prompt: `${genre} ${mood} ${bpm} BPM instrumental`, artist_name: artistName, ai_provider: 'musicgen' }),
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error);
-                // Poll for completion
-                const poll = setInterval(async () => {
-                  const check = await fetch(`/api/tracks/${data.id}`);
-                  const track = await check.json();
-                  if (track.status === 'ready' && track.audio_url) {
-                    clearInterval(poll);
-                    setBeatUrl(track.audio_url);
-                    setPhase('booth');
-                    toast.success('AI beat ready!');
-                  } else if (track.status === 'failed') {
-                    clearInterval(poll);
-                    toast.error('Generation failed — using instant beat');
+              <Button size="lg" className="flex-1" icon={<Zap className="w-5 h-5" />}
+                disabled={!artistName.trim() || !songTitle.trim()}
+                onClick={async () => {
+                  if (!artistName.trim() || !songTitle.trim()) return toast.error('Enter name and title');
+                  ensureProject();
+                  if (door === 'build') { window.location.href = '/studio'; return; }
+                  try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    stream.getTracks().forEach(t => t.stop());
+                  } catch { toast.error('Mic access needed to record'); return; }
+                  setPhase('booth');
+                  setTimeout(startBeat, 200);
+                }}>
+                Instant Beat
+              </Button>
+              <Button variant="secondary" size="lg" className="flex-1" icon={<Wand2 className="w-4 h-4" />}
+                disabled={!artistName.trim() || !songTitle.trim()}
+                onClick={async () => {
+                  if (!artistName.trim() || !songTitle.trim()) return toast.error('Enter name and title');
+                  ensureProject();
+                  try {
+                    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    s.getTracks().forEach(t => t.stop());
+                  } catch { toast.error('Mic access needed'); return; }
+                  setPhase('creating');
+                  try {
+                    const res = await fetch('/api/tracks', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ genre, mood, prompt: `${genre} ${mood} ${bpm} BPM instrumental`, artist_name: artistName, ai_provider: 'musicgen' }),
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.error);
+                    const poll = setInterval(async () => {
+                      const check = await fetch(`/api/tracks/${data.id}`);
+                      const track = await check.json();
+                      if (track.status === 'ready' && track.audio_url) {
+                        clearInterval(poll);
+                        setBeatUrl(track.audio_url);
+                        setPhase('booth');
+                        toast.success('AI beat ready!');
+                      } else if (track.status === 'failed') {
+                        clearInterval(poll);
+                        toast.error('Generation failed -- using instant beat');
+                        setPhase('booth');
+                        setTimeout(startBeat, 200);
+                      }
+                    }, 5000);
+                  } catch {
+                    toast.error('AI failed -- using instant beat');
                     setPhase('booth');
                     setTimeout(startBeat, 200);
                   }
-                }, 5000);
-              } catch {
-                toast.error('AI failed — using instant beat');
-                setPhase('booth');
-                setTimeout(startBeat, 200);
-              }
-            }}
-              disabled={!artistName.trim() || !songTitle.trim()}
-              className="flex-1 bg-white/5 hover:bg-white/10 disabled:opacity-30 text-gray-300 font-medium py-4 rounded-xl flex items-center justify-center gap-2 border border-white/10 transition-all">
-              <Wand2 className="w-4 h-4" /> AI Beat
-            </button>
-            </div>{/* close flex row */}
+                }}>
+                AI Beat
+              </Button>
+            </div>
 
             {/* AI Full Song option */}
             <button onClick={async () => {
               if (!artistName.trim() || !songTitle.trim()) return toast.error('Enter name and title');
+              ensureProject();
               setPhase('creating');
               try {
-                // Generate full song with vocals via Suno-style prompt
                 const prompt = lyrics
                   ? `${genre} ${mood} ${bpm} BPM song with vocals singing: ${lyrics.slice(0, 200)}`
                   : `${genre} ${mood} ${bpm} BPM song with vocals, catchy melody, about ${songTitle}`;
@@ -605,17 +523,13 @@ export default function SessionPage() {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
-                    genre, mood, prompt,
-                    artist_name: artistName,
-                    ai_provider: 'suno',
-                    with_vocals: true,
-                    lyrics: lyrics || undefined,
+                    genre, mood, prompt, artist_name: artistName,
+                    ai_provider: 'suno', with_vocals: true, lyrics: lyrics || undefined,
                   }),
                 });
                 const data = await res.json();
                 if (!res.ok) {
-                  // Suno not available — fall back to MusicGen instrumental
-                  toast.error('Full song AI not configured — generating instrumental');
+                  toast.error('Full song AI not configured -- generating instrumental');
                   const fallback = await fetch('/api/tracks', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -623,7 +537,6 @@ export default function SessionPage() {
                   });
                   const fbData = await fallback.json();
                   if (!fallback.ok) throw new Error(fbData.error);
-                  // Poll fallback
                   const poll = setInterval(async () => {
                     const check = await fetch(`/api/tracks/${fbData.id}`);
                     const track = await check.json();
@@ -632,24 +545,23 @@ export default function SessionPage() {
                   }, 5000);
                   return;
                 }
-                // Poll for full song
                 const poll = setInterval(async () => {
                   const check = await fetch(`/api/tracks/${data.id}`);
                   const track = await check.json();
                   if (track.status === 'ready' && track.audio_url) {
                     clearInterval(poll);
-                    setVocalUrl(track.audio_url); // Full song goes to vocal slot
-                    setPhase('mix'); // Skip booth — song is already complete
+                    setVocalUrl(track.audio_url);
+                    setPhase('mix');
                     toast.success('Full song created!');
                   } else if (track.status === 'failed') {
                     clearInterval(poll);
-                    toast.error('Full song failed — entering studio');
+                    toast.error('Full song failed -- entering studio');
                     setPhase('booth');
                     setTimeout(startBeat, 200);
                   }
                 }, 5000);
               } catch {
-                toast.error('Failed — using instant beat');
+                toast.error('Failed -- using instant beat');
                 setPhase('booth');
                 setTimeout(startBeat, 200);
               }
@@ -671,10 +583,10 @@ export default function SessionPage() {
           </div>
           <h2 className="text-2xl font-bold mb-2">Creating Your Beat</h2>
           <p className="text-gray-500 text-sm mb-2">{genre} · {mood} · {bpm} BPM</p>
-          <p className="text-gray-700 text-xs">AI is composing — this takes 2-3 minutes...</p>
+          <p className="text-gray-700 text-xs">AI is composing -- this takes 2-3 minutes...</p>
           <button onClick={() => { setPhase('booth'); setTimeout(startBeat, 200); toast.success('Switched to instant beat'); }}
             className="mt-8 text-xs text-gray-600 hover:text-teal-400 transition-colors underline">
-            Skip — use instant beat instead
+            Skip -- use instant beat instead
           </button>
         </div>
       )}
@@ -682,75 +594,60 @@ export default function SessionPage() {
       {/* ═══ THE BOOTH ═══ */}
       {phase === 'booth' && (
         <div className="relative z-10 w-full max-w-lg px-6 text-center">
-          {/* AI beat audio element is mounted globally above */}
-
-          {/* Song info */}
           <div className="mb-6">
             <h2 className="text-2xl font-bold tracking-tight">{songTitle}</h2>
             <p className="text-sm text-gray-600">{artistName}</p>
           </div>
 
-          {/* Lyrics teleprompter (songwriter mode) */}
+          {/* Lyrics teleprompter */}
           {door === 'write' && lyrics && (
             <div className="mb-4 max-h-20 overflow-auto bg-white/[0.02] rounded-xl p-3 border border-white/5">
               <p className="text-sm text-gray-400 leading-relaxed whitespace-pre-wrap">{lyrics}</p>
             </div>
           )}
 
-          {/* Circular visualizer + Level Meter */}
+          {/* Circular visualizer + VU meters */}
           <div className="flex items-center justify-center gap-4 mb-8">
-          {/* VU Meter - left side */}
-          <div className={`transition-opacity ${isRecording ? 'opacity-100' : 'opacity-30'}`}>
-            <LevelMeter analyser={analyserRef.current} height={200} width={20} showDB={true} />
-          </div>
-          <div className="relative w-64 h-64">
-            {/* Outer ring */}
-            <svg viewBox="0 0 200 200" className="w-full h-full">
-              {vizData.map((v, i) => {
-                const angle = (i / vizData.length) * Math.PI * 2 - Math.PI / 2;
-                const innerR = 60;
-                const outerR = innerR + v * 35;
-                return (
-                  <line key={i}
-                    x1={100 + Math.cos(angle) * innerR}
-                    y1={100 + Math.sin(angle) * innerR}
-                    x2={100 + Math.cos(angle) * outerR}
-                    y2={100 + Math.sin(angle) * outerR}
-                    stroke={isRecording ? '#ef4444' : '#14b8a6'}
-                    strokeWidth={2}
-                    opacity={0.3 + v * 0.7}
-                    strokeLinecap="round"
-                  />
-                );
-              })}
-              {/* Center circle */}
-              <circle cx={100} cy={100} r={55} fill="none"
-                stroke={isRecording ? '#ef444440' : '#14b8a620'} strokeWidth={1} />
-              <circle cx={100} cy={100} r={30} fill="none"
-                stroke={isRecording ? '#ef444420' : '#14b8a610'} strokeWidth={1} />
-            </svg>
-
-            {/* Center content */}
-            <div className="absolute inset-0 flex flex-col items-center justify-center">
-              {isRecording ? (
-                <>
-                  <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse mb-2" />
-                  <span className="text-2xl font-mono text-red-400 font-bold">{formatTime(recordingTime)}</span>
-                  <span className="text-[10px] text-red-400/60 uppercase tracking-widest">Recording</span>
-                </>
-              ) : (
-                <>
-                  <Mic className="w-8 h-8 text-teal-400/40 mb-2" />
-                  <span className="text-[10px] text-gray-600 uppercase tracking-widest">Ready</span>
-                </>
-              )}
+            <div className={`transition-opacity ${isRecording ? 'opacity-100' : 'opacity-30'}`}>
+              <LevelMeter analyser={recordAnalyser} height={200} width={20} showDB={true} />
+            </div>
+            <div className="relative w-64 h-64">
+              <svg viewBox="0 0 200 200" className="w-full h-full">
+                {vizData.map((v, i) => {
+                  const angle = (i / vizData.length) * Math.PI * 2 - Math.PI / 2;
+                  const innerR = 60;
+                  const outerR = innerR + v * 35;
+                  return (
+                    <line key={i}
+                      x1={100 + Math.cos(angle) * innerR} y1={100 + Math.sin(angle) * innerR}
+                      x2={100 + Math.cos(angle) * outerR} y2={100 + Math.sin(angle) * outerR}
+                      stroke={isRecording ? '#ef4444' : '#14b8a6'}
+                      strokeWidth={2} opacity={0.3 + v * 0.7} strokeLinecap="round"
+                    />
+                  );
+                })}
+                <circle cx={100} cy={100} r={55} fill="none" stroke={isRecording ? '#ef444440' : '#14b8a620'} strokeWidth={1} />
+                <circle cx={100} cy={100} r={30} fill="none" stroke={isRecording ? '#ef444420' : '#14b8a610'} strokeWidth={1} />
+              </svg>
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                {isRecording ? (
+                  <>
+                    <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse mb-2" />
+                    <span className="text-2xl font-mono text-red-400 font-bold">{formatTime(recordingTime)}</span>
+                    <span className="text-[10px] text-red-400/60 uppercase tracking-widest">Recording</span>
+                  </>
+                ) : (
+                  <>
+                    <Mic className="w-8 h-8 text-teal-400/40 mb-2" />
+                    <span className="text-[10px] text-gray-600 uppercase tracking-widest">Ready</span>
+                  </>
+                )}
+              </div>
+            </div>
+            <div className={`transition-opacity ${isRecording ? 'opacity-100' : 'opacity-30'}`}>
+              <LevelMeter analyser={recordAnalyser} height={200} width={20} showDB={true} />
             </div>
           </div>
-          {/* VU Meter - right side */}
-          <div className={`transition-opacity ${isRecording ? 'opacity-100' : 'opacity-30'}`}>
-            <LevelMeter analyser={analyserRef.current} height={200} width={20} showDB={true} />
-          </div>
-          </div>{/* close flex wrapper */}
 
           {/* Controls */}
           <div className="flex items-center justify-center gap-4 mb-8">
@@ -778,7 +675,7 @@ export default function SessionPage() {
             )}
           </div>
 
-          {/* Vocal preset */}
+          {/* Vocal & space presets */}
           {!isRecording && (
             <div className="space-y-3">
               <div className="flex gap-1.5 justify-center">
@@ -786,7 +683,7 @@ export default function SessionPage() {
                   <button key={key} onClick={() => setVocalPreset(key)}
                     className={`text-[11px] px-3 py-1.5 rounded-full transition-all ${
                       vocalPreset === key ? 'bg-teal-500/20 text-teal-400 border border-teal-500/30' : 'bg-white/5 text-gray-600 border border-transparent hover:text-white'
-                    }`}>{p.label}</button>
+                    }`}>{p.name}</button>
                 ))}
               </div>
               <div className="flex gap-1.5 justify-center">
@@ -805,8 +702,6 @@ export default function SessionPage() {
       {/* ═══ MIX ═══ */}
       {phase === 'mix' && (
         <div className="relative z-10 w-full max-w-lg px-6 text-center">
-          {/* vocal audio is mounted globally */}
-
           <h2 className="text-3xl font-bold mb-1 tracking-tight">{songTitle}</h2>
           <p className="text-sm text-gray-600 mb-2">{artistName}</p>
           <div className="flex gap-2 justify-center mb-8">
@@ -828,36 +723,29 @@ export default function SessionPage() {
             <p className="text-xs text-teal-400/60 mb-6 animate-pulse">Playing your mix...</p>
           )}
 
-          {/* Volume controls — larger, more touch-friendly */}
-          <div className="space-y-5 mb-8 bg-white/[0.02] rounded-2xl border border-white/5 p-6">
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm text-gray-400">Beat</span>
-                <span className="text-sm text-gray-600">{beatVolume}%</span>
-              </div>
-              <input type="range" min={0} max={100} value={beatVolume}
-                onChange={e => { const v = parseInt(e.target.value); setBeatVolume(v); beatPlayerRef.current?.setVolume(v / 100); }}
-                className="w-full accent-teal-500 h-2" />
-            </div>
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm text-gray-400">Vocals</span>
-                <span className="text-sm text-gray-600">{vocalVolume}%</span>
-              </div>
-              <input type="range" min={0} max={100} value={vocalVolume}
-                onChange={e => { const v = parseInt(e.target.value); setVocalVolume(v); if (vocalAudioRef.current) vocalAudioRef.current.volume = v / 100; }}
-                className="w-full accent-teal-500 h-2" />
-            </div>
+          {/* Volume controls */}
+          <Card className="mb-8 space-y-5">
+            <Slider label="Beat" value={beatVolume} suffix="%" onChange={v => {
+              setBeatVolume(v);
+              beatPlayerRef.current?.setVolume(v / 100);
+            }} />
+            <Slider label="Vocals" value={vocalVolume} suffix="%" onChange={v => {
+              setVocalVolume(v);
+              getAudioEngine().setTrackParam('vocals', 'volume', v);
+            }} />
 
             {/* Vocal preset in mix */}
             <div>
               <p className="text-xs text-gray-500 mb-2">Vocal Sound</p>
               <div className="flex gap-1.5 justify-center flex-wrap">
                 {Object.entries(VOCAL_PRESETS).map(([key, p]) => (
-                  <button key={key} onClick={() => setVocalPreset(key)}
+                  <button key={key} onClick={() => {
+                    setVocalPreset(key);
+                    getAudioEngine().applyPreset('vocals', p);
+                  }}
                     className={`text-xs px-3 py-1.5 rounded-full transition-all ${
                       vocalPreset === key ? 'bg-teal-500/20 text-teal-400 border border-teal-500/30' : 'bg-white/5 text-gray-600 border border-transparent'
-                    }`}>{p.label}</button>
+                    }`}>{p.name}</button>
                 ))}
               </div>
             </div>
@@ -879,24 +767,22 @@ export default function SessionPage() {
                 <p className="text-[10px] text-gray-600 mt-1 text-center">{AUTOTUNE_PRESETS[autotunePreset]?.desc}</p>
               )}
             </div>
-          </div>
+          </Card>
 
-          {/* Action buttons — clear hierarchy */}
+          {/* Action buttons */}
           <div className="space-y-3">
-            <button onClick={exportSong} disabled={exporting}
-              className="w-full bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white font-semibold py-4 rounded-xl flex items-center justify-center gap-2 text-lg transition-all">
-              {exporting ? <><Loader2 className="w-5 h-5 animate-spin" /> Mastering...</> : <><Download className="w-5 h-5" /> Export Song</>}
-            </button>
+            <Button size="lg" className="w-full" onClick={exportSong} loading={exporting}
+              icon={exporting ? undefined : <Download className="w-5 h-5" />}>
+              {exporting ? 'Mastering...' : 'Export Song'}
+            </Button>
 
             <div className="flex gap-3">
-              <button onClick={() => { stopAll(); setPhase('booth'); }}
-                className="flex-1 py-3 bg-white/5 hover:bg-white/10 rounded-xl text-sm text-gray-400">
+              <Button variant="secondary" size="md" className="flex-1" onClick={() => { stopAll(); setPhase('booth'); }}>
                 Re-record
-              </button>
-              <button onClick={reset}
-                className="flex-1 py-3 bg-white/5 hover:bg-white/10 rounded-xl text-sm text-gray-400">
+              </Button>
+              <Button variant="secondary" size="md" className="flex-1" onClick={reset}>
                 Start Over
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -912,14 +798,14 @@ export default function SessionPage() {
           <h2 className="text-2xl font-bold mb-1">{songTitle}</h2>
           <p className="text-gray-500 text-sm mb-6">by {artistName}</p>
 
-          <div className="bg-white/[0.02] rounded-2xl border border-white/5 p-5 mb-6 text-left">
+          <Card className="mb-6 text-left">
             <div className="grid grid-cols-2 gap-y-2 text-sm">
               <span className="text-gray-600">Genre</span><span className="text-gray-300">{genre} · {mood}</span>
               <span className="text-gray-600">Tempo</span><span className="text-gray-300">{bpm} BPM</span>
               <span className="text-gray-600">Format</span><span className="text-gray-300">MP3 320kbps, Mastered</span>
               <span className="text-gray-600">Created</span><span className="text-gray-300">{new Date().toLocaleDateString()}</span>
             </div>
-          </div>
+          </Card>
 
           <div className="flex gap-3">
             {exportUrl && (
@@ -928,14 +814,13 @@ export default function SessionPage() {
                 <Download className="w-4 h-4" /> Download
               </a>
             )}
-            <button onClick={reset}
-              className="flex-1 py-3 bg-white/5 hover:bg-white/10 rounded-xl text-sm text-gray-300">
+            <Button variant="secondary" size="md" className="flex-1" onClick={reset}>
               New Session
-            </button>
+            </Button>
           </div>
         </div>
       )}
-      </div>{/* close main content wrapper */}
+      </div>
     </div>
   );
 }
