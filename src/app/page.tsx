@@ -38,21 +38,33 @@ export default function HomePage() {
 
       {/* Three doors */}
       <div className="grid grid-cols-3 gap-6 w-full max-w-3xl relative z-10 mb-16">
-        {[
-          { href: '/session', icon: Disc3, label: 'Create', desc: 'Start a new session', accent: 'teal' },
-          { href: '/studio', icon: Sliders, label: 'Studio', desc: 'Open the DAW', accent: 'cyan' },
-          { href: '/library', icon: Library, label: 'Library', desc: 'Your projects', accent: 'violet' },
-        ].map(({ href, icon: Icon, label, desc, accent }) => (
-          <Link key={href} href={href}>
-            <div className={`group relative bg-white/[0.02] border border-white/[0.05] rounded-2xl p-8 text-center transition-all duration-300 hover:border-${accent}-500/30 hover:bg-white/[0.03] hover:scale-[1.03] hover:shadow-2xl hover:shadow-${accent}-500/5 cursor-pointer`}>
-              <div className={`w-14 h-14 rounded-2xl bg-${accent}-500/10 flex items-center justify-center mx-auto mb-5 group-hover:bg-${accent}-500/20 transition-colors`}>
-                <Icon className={`w-7 h-7 text-${accent}-400`} />
-              </div>
-              <h3 className="text-xl font-bold text-white mb-2">{label}</h3>
-              <p className="text-sm text-gray-600">{desc}</p>
+        <Link href="/session">
+          <div className="group bg-white/[0.02] border border-white/[0.05] rounded-2xl p-8 text-center transition-all duration-300 hover:border-teal-500/30 hover:bg-white/[0.03] hover:scale-[1.03] hover:shadow-2xl hover:shadow-teal-500/5 cursor-pointer">
+            <div className="w-14 h-14 rounded-2xl bg-teal-500/10 flex items-center justify-center mx-auto mb-5 group-hover:bg-teal-500/20 transition-colors">
+              <Disc3 className="w-7 h-7 text-teal-400" />
             </div>
-          </Link>
-        ))}
+            <h3 className="text-xl font-bold text-white mb-2">Create</h3>
+            <p className="text-sm text-gray-600">Start a new session</p>
+          </div>
+        </Link>
+        <Link href="/studio">
+          <div className="group bg-white/[0.02] border border-white/[0.05] rounded-2xl p-8 text-center transition-all duration-300 hover:border-cyan-500/30 hover:bg-white/[0.03] hover:scale-[1.03] hover:shadow-2xl hover:shadow-cyan-500/5 cursor-pointer">
+            <div className="w-14 h-14 rounded-2xl bg-cyan-500/10 flex items-center justify-center mx-auto mb-5 group-hover:bg-cyan-500/20 transition-colors">
+              <Sliders className="w-7 h-7 text-cyan-400" />
+            </div>
+            <h3 className="text-xl font-bold text-white mb-2">Studio</h3>
+            <p className="text-sm text-gray-600">Open the DAW</p>
+          </div>
+        </Link>
+        <Link href="/library">
+          <div className="group bg-white/[0.02] border border-white/[0.05] rounded-2xl p-8 text-center transition-all duration-300 hover:border-violet-500/30 hover:bg-white/[0.03] hover:scale-[1.03] hover:shadow-2xl hover:shadow-violet-500/5 cursor-pointer">
+            <div className="w-14 h-14 rounded-2xl bg-violet-500/10 flex items-center justify-center mx-auto mb-5 group-hover:bg-violet-500/20 transition-colors">
+              <Library className="w-7 h-7 text-violet-400" />
+            </div>
+            <h3 className="text-xl font-bold text-white mb-2">Library</h3>
+            <p className="text-sm text-gray-600">Your projects</p>
+          </div>
+        </Link>
       </div>
 
       {/* Recent projects — minimal */}
